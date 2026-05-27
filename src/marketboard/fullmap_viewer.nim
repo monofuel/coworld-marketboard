@@ -1,6 +1,6 @@
-import std/[monotimes, os, parseopt]
+import std/[json, monotimes, os, parseopt, strutils]
 import pixie, windy
-import bitworld/protocol, bitworld/server, marketboard/sim, marketboard/replays
+import bitworld/protocol, marketboard/sim, marketboard/replays, marketboard/legends
 import marketboard/global_render
 import client/global_client
 
@@ -11,7 +11,9 @@ type
     replay: MbReplayPlayer
     loaded: bool
     viewerState: GlobalViewerState
-    inputPackets: seq[string]
+    legendEvents: seq[LegendEvent]
+    activeOverlay: string
+    overlayTicksLeft: int
 
 proc bitworldClientDir(): string =
   getHomeDir() / ".nimby" / "pkgs" / "bitworld" / "client"
@@ -22,21 +24,45 @@ proc clientDataDir(): string =
 proc clientDistDir(): string =
   bitworldClientDir() / "dist"
 
-proc addInputPacket(viewer: FullmapViewer, packet: string) =
-  viewer.inputPackets.add(packet)
+proc loadLegendsForReplay(viewer: FullmapViewer, replayPath: string) =
+  ## Loads legend events from the .legends.json sidecar file.
+  viewer.legendEvents = @[]
+  let legendsPath = replayPath.replace(".mbreplay", ".legends.json")
+  if fileExists(legendsPath):
+    try:
+      let jsonData = parseJson(readFile(legendsPath))
+      if jsonData.hasKey("events"):
+        for e in jsonData["events"]:
+          viewer.legendEvents.add LegendEvent(
+            tick: e["tick"].getInt(),
+            kind: parseEnum[LegendEventKind](e["kind"].getStr()),
+            description: e["description"].getStr(),
+            excitement: e["excitement"].getFloat()
+          )
+    except CatchableError:
+      discard
+
+proc checkLegendEvents(viewer: FullmapViewer) =
+  ## Checks if the current tick matches a legend event and activates the overlay.
+  if viewer.overlayTicksLeft > 0:
+    dec viewer.overlayTicksLeft
+  let tick = viewer.sim.tickCount
+  for event in viewer.legendEvents:
+    if event.tick == tick:
+      viewer.activeOverlay = event.description
+      viewer.overlayTicksLeft = 72
+      break
 
 proc initFullmapViewer*(): FullmapViewer =
   result = FullmapViewer()
   result.sim = initSimServer(0)
   loadRenderAssets(result.sim)
-  let viewer = result
   result.app = initGlobalApp(
     options = GlobalOptions(
       title: "Marketboard Fullmap Viewer",
       atlasPath: clientDistDir() / "atlas.png",
       palettePath: clientDataDir() / "pallete.png",
-      packetSink: proc(packet: string) =
-        viewer.addInputPacket(packet)
+      packetSink: proc(packet: string) = discard
     )
   )
   result.app.setStatus("Drop a .mbreplay file or pass --load path")
@@ -51,9 +77,11 @@ proc loadReplay*(viewer: FullmapViewer, path: string) =
   viewer.replay = initMbReplayPlayer(data)
   viewer.loaded = true
   viewer.viewerState = GlobalViewerState()
-  viewer.inputPackets.setLen(0)
+  viewer.activeOverlay = ""
+  viewer.overlayTicksLeft = 0
   viewer.app.resetProtocolState()
   viewer.app.setStatus("")
+  viewer.loadLegendsForReplay(path)
 
 proc tick*(viewer: FullmapViewer) =
   viewer.app.handleInput()
@@ -63,6 +91,7 @@ proc tick*(viewer: FullmapViewer) =
       for _ in 0 ..< viewer.replay.replaySpeed():
         if viewer.replay.playing:
           viewer.replay.stepReplay(viewer.sim)
+          viewer.checkLegendEvents()
       if viewer.replay.looping and not viewer.replay.playing:
         viewer.replay.seekReplay(viewer.sim, 0)
         viewer.replay.playing = true
@@ -70,6 +99,11 @@ proc tick*(viewer: FullmapViewer) =
     let packet = buildGlobalFramePacket(viewer.sim, viewer.viewerState)
     if packet.len > 0:
       viewer.app.parseMessage(blobFromBytes(packet))
+
+    let overlayText = if viewer.overlayTicksLeft > 0: viewer.activeOverlay else: ""
+    let legendPacket = buildLegendPacket(viewer.sim, overlayText)
+    if legendPacket.len > 0:
+      viewer.app.parseMessage(blobFromBytes(legendPacket))
 
   viewer.app.maybeFit()
   viewer.app.draw()
@@ -86,9 +120,11 @@ proc installFileDrop*(viewer: FullmapViewer) =
       viewer.replay = initMbReplayPlayer(data)
       viewer.loaded = true
       viewer.viewerState = GlobalViewerState()
-      viewer.inputPackets.setLen(0)
+      viewer.activeOverlay = ""
+      viewer.overlayTicksLeft = 0
       viewer.app.resetProtocolState()
       viewer.app.setStatus("")
+      viewer.loadLegendsForReplay(fileName)
   )
 
 when isMainModule:

@@ -8,13 +8,17 @@ const
   MapLayerKind = 0
   ZoomableFlag = 1
   ScoreboardLayerId* = 1
-  ScoreboardLayerType = 1
+  ScoreboardLayerType = 2
+  LegendLayerId* = 2
+  LegendLayerType = 5
   UiFlag = 2
   TileSize = MbTileSize
   MapPixelW* = WorldWidthTiles * TileSize
   MapPixelH* = WorldHeightTiles * TileSize
-  ScoreboardWidth* = 160
-  ScoreboardHeight* = 100
+  ScoreboardWidth* = 220
+  ScoreboardHeight* = 180
+  LegendWidth* = 240
+  LegendHeight* = 20
 
   TileGrassSpriteId = 1
   TilePathSpriteId = 2
@@ -26,6 +30,7 @@ const
   ProgressSpriteBase = 200
   ScoreboardTextSpriteBase = 300
   NameLabelSpriteBase = 400
+  LegendTextSpriteId = 500
 
   TileObjectBase = 0
   WorldObjectObjBase = 3000
@@ -33,8 +38,9 @@ const
   SignalObjectBase = 4500
   NameLabelObjectBase = 4600
   ProgressObjectBase = 4700
-  SelectionObjectId = 5000
+  SelectionObjectBase = 5000
   ScoreboardRowObjectBase = 6000
+  LegendObjectId = 7000
 
   ProgressBarWidth = 16
   ProgressBarHeight = 3
@@ -290,10 +296,16 @@ proc signalSpriteId(icon: int): int =
 proc activityLabel(state: PlayerState): string =
   case state
   of Idle: ""
-  of Gathering: "GATH"
-  of Crafting: "CRFT"
-  of AtSellStall: "SELL"
-  of AtBuyStall: "BUY"
+  of Gathering: "gathering"
+  of Crafting: "crafting"
+  of AtSellStall: "selling"
+  of AtBuyStall: "buying"
+
+proc roleLabel(role: Role): string =
+  case role
+  of NoRole: "new"
+  of Gatherer: "gatherer"
+  of Crafter: "crafter"
 
 proc buildGlobalInitPacket*(sim: SimServer): seq[uint8] =
   var packet: seq[uint8]
@@ -303,6 +315,9 @@ proc buildGlobalInitPacket*(sim: SimServer): seq[uint8] =
 
   packet.addLayer(ScoreboardLayerId, ScoreboardLayerType, UiFlag)
   packet.addViewport(ScoreboardLayerId, ScoreboardWidth, ScoreboardHeight)
+
+  packet.addLayer(LegendLayerId, LegendLayerType, UiFlag)
+  packet.addViewport(LegendLayerId, LegendWidth, LegendHeight)
 
   # Tile sprites
   packet.addSprite(TileGrassSpriteId, TileSize, TileSize, makeRgbaTile(3), "Grass")
@@ -417,25 +432,65 @@ proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState): seq[
           let labelY = player.y + 8
           packet.addObject(NameLabelObjectBase + idx, labelX, labelY, z + 1, MapLayerId, labelSpriteId)
 
-  # Scoreboard
+    # Selection highlight
+    if player.state notin {Gathering, Crafting}:
+      let target = sim.bestInteractionTile(player)
+      if inTileBounds(target.tx, target.ty):
+        packet.addObject(SelectionObjectBase + idx, target.tx * TileSize, target.ty * TileSize, 2, MapLayerId, SelectionSpriteId)
+
+  # Scoreboard: two lines per player
   if sim.letterSprites.len > 0:
+    var rowSlot = 0
     for i, player in sim.players:
       if i >= MaxPlayers:
         break
-      let roleTag = case player.role
-        of NoRole: "?"
-        of Gatherer: "G"
-        of Crafter: "C"
       let activity = activityLabel(player.state)
-      let row = roleTag & " " & player.name & " " & $player.gold & "g"
-      let fullRow = if activity.len > 0: row & " " & activity else: row
-      let rowPixels = renderTextToRgba(sim.letterSprites, fullRow, 15)
-      if rowPixels.len > 0:
-        let rowWidth = fullRow.len * CharWidth + 2
-        let rowHeight = CharHeight + 2
-        let rowSpriteId = ScoreboardTextSpriteBase + i
-        packet.addSprite(rowSpriteId, rowWidth, rowHeight, rowPixels)
-        let rowY = 2 + i * (CharHeight + 2)
-        packet.addObject(ScoreboardRowObjectBase + i, 2, rowY, 0, ScoreboardLayerId, rowSpriteId)
+      let line1 = player.name & " " & roleLabel(player.role) &
+        (if activity.len > 0: " " & activity else: "")
+      let gearCount = player.equippedGearCount()
+      let totalMats = player.inv.wood + player.inv.stone +
+        player.inv.hardwood + player.inv.copper +
+        player.inv.ironwood + player.inv.iron
+      var line2 = $player.gold & " gold  gear " & $gearCount & " of " & $GearSlotCount
+      if totalMats > 0:
+        line2.add "  mats " & $totalMats
 
+      let line1Pixels = renderTextToRgba(sim.letterSprites, line1, 15)
+      if line1Pixels.len > 0:
+        let w = line1.len * CharWidth + 2
+        let h = CharHeight + 2
+        let spriteId = ScoreboardTextSpriteBase + rowSlot
+        packet.addSprite(spriteId, w, h, line1Pixels)
+        let rowY = 2 + rowSlot * (CharHeight + 2)
+        packet.addObject(ScoreboardRowObjectBase + rowSlot, 2, rowY, 0, ScoreboardLayerId, spriteId)
+      inc rowSlot
+
+      let line2Pixels = renderTextToRgba(sim.letterSprites, line2, 6)
+      if line2Pixels.len > 0:
+        let w = line2.len * CharWidth + 2
+        let h = CharHeight + 2
+        let spriteId = ScoreboardTextSpriteBase + rowSlot
+        packet.addSprite(spriteId, w, h, line2Pixels)
+        let rowY = 2 + rowSlot * (CharHeight + 2)
+        packet.addObject(ScoreboardRowObjectBase + rowSlot, 2, rowY, 0, ScoreboardLayerId, spriteId)
+      inc rowSlot
+
+  packet
+
+proc buildLegendPacket*(sim: SimServer, activeOverlay: string): seq[uint8] =
+  ## Builds a protocol packet for the legend overlay layer.
+  var packet: seq[uint8]
+  if activeOverlay.len == 0 or sim.letterSprites.len == 0:
+    return packet
+  let maxChars = (LegendWidth - 4) div CharWidth
+  let text = if activeOverlay.len > maxChars: activeOverlay[0 ..< maxChars] else: activeOverlay
+  let textPixels = renderTextToRgba(sim.letterSprites, text, 14)
+  if textPixels.len == 0:
+    return packet
+  let textWidth = text.len * CharWidth + 2
+  let textHeight = CharHeight + 2
+  packet.addSprite(LegendTextSpriteId, textWidth, textHeight, textPixels)
+  let textX = (LegendWidth - textWidth) div 2
+  let textY = (LegendHeight - textHeight) div 2
+  packet.addObject(LegendObjectId, textX, textY, 0, LegendLayerId, LegendTextSpriteId)
   packet
