@@ -190,13 +190,45 @@ proc makeRgbaProgressBar(fill: int, maxWidth: int): seq[uint8] =
       result[offset + 3] = c.a
 
 proc renderTextToRgba(letterSprites: seq[Sprite], text: string, color: uint8): seq[uint8] =
-  let width = text.len * CharWidth
-  let height = CharHeight
-  if width == 0:
+  let innerWidth = text.len * CharWidth
+  let innerHeight = CharHeight
+  if innerWidth == 0:
     return @[]
+  let width = innerWidth + 2
+  let height = innerHeight + 2
   let rgba = Palette[color and 0x0f]
   result = newSeq[uint8](width * height * 4)
-  var offsetX = 0
+  # Outline pass: draw dark pixels in 8 neighbors of each lit pixel
+  var offsetX = 1
+  for ch in text:
+    if ch == ' ':
+      offsetX += CharWidth
+      continue
+    var idx = -1
+    if ch >= '0' and ch <= '9':
+      idx = 26 + 4 + (ord(ch) - ord('0'))
+    else:
+      idx = letterIndex(ch)
+    if idx >= 0 and idx < letterSprites.len:
+      let sprite = letterSprites[idx]
+      for sy in 0 ..< min(sprite.height, CharHeight):
+        for sx in 0 ..< min(sprite.width, CharWidth):
+          let pixelIdx = sprite.pixels[sy * sprite.width + sx]
+          if pixelIdx != TransparentColorIndex and pixelIdx != 0:
+            for oy in -1 .. 1:
+              for ox in -1 .. 1:
+                let dx = offsetX + sx + ox
+                let dy = 1 + sy + oy
+                if dx >= 0 and dx < width and dy >= 0 and dy < height:
+                  let destOffset = (dy * width + dx) * 4
+                  if result[destOffset + 3] == 0:
+                    result[destOffset] = 0
+                    result[destOffset + 1] = 0
+                    result[destOffset + 2] = 0
+                    result[destOffset + 3] = 255
+    offsetX += CharWidth
+  # Foreground pass: overwrite with colored text
+  offsetX = 1
   for ch in text:
     if ch == ' ':
       offsetX += CharWidth
@@ -213,7 +245,7 @@ proc renderTextToRgba(letterSprites: seq[Sprite], text: string, color: uint8): s
           let pixelIdx = sprite.pixels[sy * sprite.width + sx]
           if pixelIdx != TransparentColorIndex and pixelIdx != 0:
             let dx = offsetX + sx
-            let dy = sy
+            let dy = 1 + sy
             if dx < width:
               let destOffset = (dy * width + dx) * 4
               result[destOffset] = rgba.r
@@ -377,9 +409,10 @@ proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState): seq[
       if label.len > 0:
         let labelPixels = renderTextToRgba(sim.letterSprites, label, 15)
         if labelPixels.len > 0:
-          let labelWidth = label.len * CharWidth
+          let labelWidth = label.len * CharWidth + 2
+          let labelHeight = CharHeight + 2
           let labelSpriteId = NameLabelSpriteBase + idx
-          packet.addSprite(labelSpriteId, labelWidth, CharHeight, labelPixels)
+          packet.addSprite(labelSpriteId, labelWidth, labelHeight, labelPixels)
           let labelX = player.x + 3 - labelWidth div 2
           let labelY = player.y + 8
           packet.addObject(NameLabelObjectBase + idx, labelX, labelY, z + 1, MapLayerId, labelSpriteId)
@@ -398,9 +431,10 @@ proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState): seq[
       let fullRow = if activity.len > 0: row & " " & activity else: row
       let rowPixels = renderTextToRgba(sim.letterSprites, fullRow, 15)
       if rowPixels.len > 0:
-        let rowWidth = fullRow.len * CharWidth
+        let rowWidth = fullRow.len * CharWidth + 2
+        let rowHeight = CharHeight + 2
         let rowSpriteId = ScoreboardTextSpriteBase + i
-        packet.addSprite(rowSpriteId, rowWidth, CharHeight, rowPixels)
+        packet.addSprite(rowSpriteId, rowWidth, rowHeight, rowPixels)
         let rowY = 2 + i * (CharHeight + 2)
         packet.addObject(ScoreboardRowObjectBase + i, 2, rowY, 0, ScoreboardLayerId, rowSpriteId)
 
