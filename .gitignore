@@ -1,0 +1,6 @@
+nimcache/
+*.exe
+/marketboard
+/out/
+nim.cfg
+nimby.paths

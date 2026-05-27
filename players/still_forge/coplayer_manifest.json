@@ -1,0 +1,7 @@
+{
+  "author": "monofuel",
+  "name": "still_forge",
+  "image_uri": "ghcr.io/metta-ai/coworld-marketboard-still-forge:latest",
+  "run": ["/bin/still_forge"],
+  "games": ["marketboard"]
+}
