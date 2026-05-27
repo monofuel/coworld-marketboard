@@ -219,7 +219,9 @@ proc parseGameState*(jsonStr: string): GameState =
 const BotTileSize = 8
 
 proc connectBot*(host: string, port: int, name: string): WebSocket =
-  let envUrl = getEnv("COWORLD_PLAYER_WS_URL")
+  var envUrl = getEnv("COGAMES_ENGINE_WS_URL")
+  if envUrl.len == 0:
+    envUrl = getEnv("COWORLD_PLAYER_WS_URL")
   let url =
     if envUrl.len > 0: envUrl
     else: "ws://" & host & ":" & $port & "/state?name=" & name

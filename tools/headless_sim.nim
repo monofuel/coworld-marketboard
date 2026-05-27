@@ -1,15 +1,15 @@
 import std/[os, parseopt, strformat, strutils]
 import
-  ../sim,
-  ../replays,
-  ../players/common,
-  ../players/still_forge as sf,
-  ../players/iron_works as iw,
-  ../players/colm as colm_bot,
-  ../players/zorori as zr,
-  ../players/solenne as sol,
-  ../players/rkhenna as rk,
-  ../players/pipitori as pip
+  marketboard/sim,
+  marketboard/replays,
+  common,
+  still_forge as sf,
+  iron_works as iw,
+  colm as colm_bot,
+  zorori as zr,
+  solenne as sol,
+  rkhenna as rk,
+  pipitori as pip
 
 const RootDir = currentSourcePath.parentDir.parentDir
 const NumGearSlots = common.GearSlotCount

@@ -1,16 +1,16 @@
 import std/[exitprocs, monotimes, net, os, osproc, parseopt, sequtils, strutils, times]
 
 const
-  ServerSource = "marketboard" / "marketboard.nim"
+  ServerSource = "src" / "marketboard.nim"
   ClientSource = "client" / "player_client.nim"
   BotSources = [
-    ("StillForge", "marketboard" / "players" / "still_forge.nim"),
-    ("IronWorks", "marketboard" / "players" / "iron_works.nim"),
-    ("Colm", "marketboard" / "players" / "colm.nim"),
-    ("Zorori", "marketboard" / "players" / "zorori.nim"),
-    ("Solenne", "marketboard" / "players" / "solenne.nim"),
-    ("Rkhenna", "marketboard" / "players" / "rkhenna.nim"),
-    ("Pipitori", "marketboard" / "players" / "pipitori.nim"),
+    ("StillForge", "players" / "still_forge.nim"),
+    ("IronWorks", "players" / "iron_works.nim"),
+    ("Colm", "players" / "colm.nim"),
+    ("Zorori", "players" / "zorori.nim"),
+    ("Solenne", "players" / "solenne.nim"),
+    ("Rkhenna", "players" / "rkhenna.nim"),
+    ("Pipitori", "players" / "pipitori.nim"),
   ]
   ServerReadyTimeoutMs = 5000
   PollIntervalMs = 100

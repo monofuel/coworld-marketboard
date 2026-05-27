@@ -1,5 +1,6 @@
-import std/[algorithm, json]
+import std/[algorithm, json, os]
 import bitworld/server
+from bitworld/protocol import loadPalette, ScreenWidth, ScreenHeight
 
 const
   MbTileSize* = 8
@@ -1227,3 +1228,348 @@ proc gameHash*(sim: SimServer): uint64 =
     result.mixHashInt(ord(listing.item))
     result.mixHashInt(listing.quantity)
     result.mixHashInt(listing.priceEach)
+
+proc loadRenderAssets*(sim: var SimServer, palettePath, numbersPath, lettersPath: string) =
+  loadPalette(palettePath)
+  sim.fb = initFramebuffer()
+  sim.digitSprites = loadDigitSprites(numbersPath)
+  if fileExists(lettersPath):
+    sim.letterSprites = loadLetterSprites(lettersPath)
+
+proc loadRenderAssets*(sim: var SimServer) =
+  sim.loadRenderAssets("data" / "pallete.png", "data" / "numbers.png", "data" / "letters.png")
+
+const
+  FloorBackdropColor* = 3'u8
+  ProgressBarWidth* = 6
+
+proc worldClampPixel*(x, maxValue: int): int =
+  x.clamp(0, maxValue)
+
+proc makeOutlinedSprite*(fill, outline: uint8, size: int): Sprite =
+  result.width = size
+  result.height = size
+  result.pixels = newSeq[uint8](size * size)
+  for y in 0 ..< size:
+    for x in 0 ..< size:
+      if x == 0 or y == 0 or x == size - 1 or y == size - 1:
+        result.pixels[y * size + x] = outline
+      else:
+        result.pixels[y * size + x] = fill
+
+proc objectSprite*(obj: WorldObject): Sprite =
+  case obj.kind
+  of GatherNodeObj:
+    if obj.depleted:
+      makeOutlinedSprite(5, 1, MbTileSize)
+    else:
+      case obj.material
+      of WoodItem: makeOutlinedSprite(11, 4, MbTileSize)
+      of StoneItem: makeOutlinedSprite(6, 5, MbTileSize)
+      of HardwoodItem: makeOutlinedSprite(3, 4, MbTileSize)
+      of CopperItem: makeOutlinedSprite(9, 5, MbTileSize)
+      of IronwoodItem: makeOutlinedSprite(2, 1, MbTileSize)
+      of IronItem: makeOutlinedSprite(14, 1, MbTileSize)
+      else: makeOutlinedSprite(7, 1, MbTileSize)
+  of CraftStationObj:
+    case obj.craftTier
+    of 2: makeOutlinedSprite(8, 0, MbTileSize)
+    of 3: makeOutlinedSprite(14, 0, MbTileSize)
+    else: makeOutlinedSprite(6, 0, MbTileSize)
+  of SellStallObj:
+    makeOutlinedSprite(9, 4, MbTileSize)
+  of BuyStallObj:
+    makeOutlinedSprite(12, 4, MbTileSize)
+  of GathererStallObj:
+    makeOutlinedSprite(11, 3, MbTileSize)
+  of CrafterStallObj:
+    makeOutlinedSprite(8, 2, MbTileSize)
+  of CancelStallObj:
+    makeOutlinedSprite(4, 1, MbTileSize)
+
+proc objectTileLetter*(kind: WorldObjectKind, depleted: bool): char =
+  case kind
+  of GatherNodeObj:
+    if depleted: ' ' else: 'G'
+  of CraftStationObj: 'C'
+  of SellStallObj: 'S'
+  of BuyStallObj: 'B'
+  of GathererStallObj: 'G'
+  of CrafterStallObj: 'F'
+  of CancelStallObj: 'X'
+
+proc roleTint*(role: Role): uint8 =
+  case role
+  of NoRole: 6'u8
+  of Gatherer: 11'u8
+  of Crafter: 12'u8
+
+proc signalColor*(icon: int): uint8 =
+  case icon
+  of 0: 4'u8
+  of 1: 6'u8
+  of 2: 9'u8
+  of 3: 14'u8
+  else: 7'u8
+
+proc renderTerrain*(sim: var SimServer, cameraX, cameraY: int) =
+  let
+    startTx = max(0, cameraX div MbTileSize)
+    startTy = max(0, cameraY div MbTileSize)
+    endTx = min(WorldWidthTiles - 1, (cameraX + ScreenWidth - 1) div MbTileSize)
+    endTy = min(WorldHeightTiles - 1, (cameraY + ScreenHeight - 1) div MbTileSize)
+  for ty in startTy .. endTy:
+    for tx in startTx .. endTx:
+      let
+        worldX = tx * MbTileSize
+        worldY = ty * MbTileSize
+        screenX = worldX - cameraX
+        screenY = worldY - cameraY
+        tileKind = sim.tileKinds[tileIndex(tx, ty)]
+      let color =
+        case tileKind
+        of GrassTile: 3'u8
+        of PathTile: 5'u8
+        of WallTile: 1'u8
+      for py in 0 ..< MbTileSize:
+        for px in 0 ..< MbTileSize:
+          sim.fb.putPixel(screenX + px, screenY + py, color)
+
+proc renderObjects*(sim: var SimServer, cameraX, cameraY: int) =
+  for obj in sim.objects:
+    let sprite = objectSprite(obj)
+    sim.fb.blitSprite(
+      sprite,
+      obj.tx * MbTileSize,
+      obj.ty * MbTileSize,
+      cameraX,
+      cameraY
+    )
+    if sim.letterSprites.len > 0:
+      let letter = objectTileLetter(obj.kind, obj.depleted)
+      if letter != ' ':
+        sim.fb.blitText(sim.letterSprites, $letter,
+          obj.tx * MbTileSize - cameraX + 1,
+          obj.ty * MbTileSize - cameraY + 1)
+
+proc renderSelection*(sim: var SimServer, playerIndex, cameraX, cameraY: int) =
+  if playerIndex < 0 or playerIndex >= sim.players.len:
+    return
+  let player = sim.players[playerIndex]
+  if player.state in {Gathering, Crafting}:
+    return
+  let target = sim.bestInteractionTile(player)
+  if not inTileBounds(target.tx, target.ty):
+    return
+  let
+    worldX = target.tx * MbTileSize
+    worldY = target.ty * MbTileSize
+    screenX = worldX - cameraX
+    screenY = worldY - cameraY
+  for px in 0 ..< MbTileSize:
+    sim.fb.putPixel(screenX + px, screenY, 10)
+    sim.fb.putPixel(screenX + px, screenY + MbTileSize - 1, 10)
+  for py in 1 ..< MbTileSize - 1:
+    sim.fb.putPixel(screenX, screenY + py, 10)
+    sim.fb.putPixel(screenX + MbTileSize - 1, screenY + py, 10)
+
+proc renderActionProgress*(sim: var SimServer, playerIndex, cameraX, cameraY: int) =
+  if playerIndex < 0 or playerIndex >= sim.players.len: return
+  let player = sim.players[playerIndex]
+  if player.state notin {Gathering, Crafting}: return
+  let targetIdx = player.actionTargetIndex
+  if targetIdx < 0 or targetIdx >= sim.objects.len: return
+  let obj = sim.objects[targetIdx]
+  let screenX = obj.tx * MbTileSize - cameraX
+  let screenY = obj.ty * MbTileSize - cameraY
+  let totalWork =
+    if player.state == Gathering: player.effectiveGatherWork()
+    else:
+      let gear = obj.craftStationItem()
+      craftWorkForTier(gearTier(gear))
+  let filled = min(28, player.actionProgress * 28 div max(1, totalWork))
+  var perimX, perimY: array[28, int]
+  var i = 0
+  for x in 0 ..< MbTileSize:
+    perimX[i] = x; perimY[i] = 0; inc i
+  for y in 1 ..< MbTileSize - 1:
+    perimX[i] = MbTileSize - 1; perimY[i] = y; inc i
+  for x in countdown(MbTileSize - 1, 0):
+    perimX[i] = x; perimY[i] = MbTileSize - 1; inc i
+  for y in countdown(MbTileSize - 2, 1):
+    perimX[i] = 0; perimY[i] = y; inc i
+  for j in 0 ..< 28:
+    let color: uint8 = if j < filled: 14 else: 1
+    sim.fb.putPixel(screenX + perimX[j], screenY + perimY[j], color)
+
+proc renderPlayers*(sim: var SimServer, cameraX, cameraY: int) =
+  for player in sim.players:
+    let tint = roleTint(player.role)
+    sim.fb.blitSpriteTinted(player.sprite, player.x, player.y, cameraX, cameraY, tint)
+    if player.signalIcon >= 0:
+      let
+        iconX = player.x + player.sprite.width div 2 - 1
+        iconY = player.y - 4
+        color = signalColor(player.signalIcon)
+        screenX = iconX - cameraX
+        screenY = iconY - cameraY
+      for py in 0 ..< 3:
+        for px in 0 ..< 3:
+          sim.fb.putPixel(screenX + px, screenY + py, color)
+
+proc drawProgressBar*(sim: var SimServer, progress, total, screenX, screenY: int) =
+  let filledWidth = max(1, min(ProgressBarWidth, (progress * ProgressBarWidth + total - 1) div total))
+  for px in 0 ..< ProgressBarWidth:
+    sim.fb.putPixel(screenX + px, screenY, 1)
+    sim.fb.putPixel(screenX + px, screenY + 1, 1)
+  for px in 0 ..< filledWidth:
+    sim.fb.putPixel(screenX + px, screenY, 10)
+    sim.fb.putPixel(screenX + px, screenY + 1, 14)
+
+proc renderNumber*(
+  fb: var Framebuffer,
+  digitSprites: array[10, Sprite],
+  value, screenX, screenY: int
+) =
+  let text = $max(0, value)
+  var x = screenX
+  for ch in text:
+    let digit = ord(ch) - ord('0')
+    fb.blitSprite(digitSprites[digit], x, screenY, 0, 0)
+    x += digitSprites[digit].width
+
+proc renderHud*(sim: var SimServer, playerIndex: int) =
+  if playerIndex < 0 or playerIndex >= sim.players.len:
+    return
+  let player = sim.players[playerIndex]
+  sim.fb.renderNumber(sim.digitSprites, player.gold, 1, 1)
+  if sim.letterSprites.len > 0:
+    let roleName = roleShortName(player.role)
+    sim.fb.blitText(sim.letterSprites, roleName, ScreenWidth - roleName.len * 6 - 1, 1)
+  let invY = 9
+  sim.fb.renderNumber(sim.digitSprites, player.inv.wood, 1, invY)
+  if sim.letterSprites.len > 0:
+    sim.fb.blitText(sim.letterSprites, "W", 1 + 18, invY)
+  sim.fb.renderNumber(sim.digitSprites, player.inv.stone, 40, invY)
+  if sim.letterSprites.len > 0:
+    sim.fb.blitText(sim.letterSprites, "S", 40 + 18, invY)
+  let gearCount = player.equippedGearCount()
+  if sim.letterSprites.len > 0:
+    let gearText = "G" & $gearCount
+    sim.fb.blitText(sim.letterSprites, gearText, 70, invY)
+  let invY2 = 17
+  let t2Wood = player.inv.hardwood
+  let t2Ore = player.inv.copper
+  if t2Wood > 0 or t2Ore > 0:
+    sim.fb.renderNumber(sim.digitSprites, t2Wood, 1, invY2)
+    if sim.letterSprites.len > 0:
+      sim.fb.blitText(sim.letterSprites, "H", 1 + 18, invY2)
+    sim.fb.renderNumber(sim.digitSprites, t2Ore, 40, invY2)
+    if sim.letterSprites.len > 0:
+      sim.fb.blitText(sim.letterSprites, "C", 40 + 18, invY2)
+  let invY3 = 25
+  let t3Wood = player.inv.ironwood
+  let t3Ore = player.inv.iron
+  if t3Wood > 0 or t3Ore > 0:
+    sim.fb.renderNumber(sim.digitSprites, t3Wood, 1, invY3)
+    if sim.letterSprites.len > 0:
+      sim.fb.blitText(sim.letterSprites, "I", 1 + 18, invY3)
+    sim.fb.renderNumber(sim.digitSprites, t3Ore, 40, invY3)
+    if sim.letterSprites.len > 0:
+      sim.fb.blitText(sim.letterSprites, "R", 40 + 18, invY3)
+  if sim.letterSprites.len > 0 and player.role == NoRole and player.state == Idle:
+    let prompt = "PICK A ROLE"
+    let promptX = (ScreenWidth - prompt.len * 6) div 2
+    sim.fb.blitText(sim.letterSprites, prompt, promptX, 2)
+    sim.fb.blitText(sim.letterSprites, "< GATHERER", 2, 10)
+    sim.fb.blitText(sim.letterSprites, "CRAFTER >", ScreenWidth - 9 * 6 - 2, 10)
+  if sim.letterSprites.len > 0 and player.state == Idle:
+    var labelObjIndex = -1
+    let target = sim.bestInteractionTile(player)
+    if inTileBounds(target.tx, target.ty):
+      labelObjIndex = sim.objectIndexAt(target.tx, target.ty)
+    if labelObjIndex >= 0:
+      let obj = sim.objects[labelObjIndex]
+      let label = obj.objectLabel()
+      let labelX = (ScreenWidth - label.len * 6) div 2
+      sim.fb.blitText(sim.letterSprites, label, labelX, ScreenHeight - 14)
+      let canGather = obj.kind == GatherNodeObj and not obj.depleted and player.role == Gatherer and
+                      player.canGatherMaterial(obj.material)
+      let canCraft = obj.kind == CraftStationObj and player.role == Crafter and player.inv.hasCraftMaterials()
+      if canGather or canCraft:
+        let hint = "HOLD A"
+        let hintX = (ScreenWidth - hint.len * 6) div 2
+        sim.fb.blitText(sim.letterSprites, hint, hintX, ScreenHeight - 7)
+      elif obj.kind == GatherNodeObj and not obj.depleted:
+        var hint = ""
+        if player.role != Gatherer:
+          hint = "NEED GATHERER"
+        elif not player.canGatherMaterial(obj.material):
+          hint = "NEED T" & $(materialTier(obj.material) - 1) & " GEAR"
+        if hint.len > 0:
+          let hintX = (ScreenWidth - hint.len * 6) div 2
+          sim.fb.blitText(sim.letterSprites, hint, hintX, ScreenHeight - 7)
+      elif obj.kind == CraftStationObj:
+        var hint = ""
+        if player.role != Crafter:
+          hint = "NEED CRAFTER"
+        elif not player.inv.hasCraftMaterials():
+          hint = "NEED MATERIALS"
+        if hint.len > 0:
+          let hintX = (ScreenWidth - hint.len * 6) div 2
+          sim.fb.blitText(sim.letterSprites, hint, hintX, ScreenHeight - 7)
+  if player.state == Gathering:
+    sim.drawProgressBar(player.actionProgress, player.effectiveGatherWork(), 50, ScreenHeight - 5)
+  elif player.state == Crafting:
+    let targetIdx = player.actionTargetIndex
+    if targetIdx >= 0 and targetIdx < sim.objects.len:
+      let gear = sim.objects[targetIdx].craftStationItem()
+      sim.drawProgressBar(player.actionProgress, craftWorkForTier(gearTier(gear)), 50, ScreenHeight - 5)
+  if player.state == AtSellStall:
+    for px in 0 ..< ScreenWidth:
+      for py in ScreenHeight - 20 ..< ScreenHeight:
+        sim.fb.putPixel(px, py, 0)
+    if sim.letterSprites.len > 0:
+      sim.fb.blitText(sim.letterSprites, "SELL", 2, ScreenHeight - 18)
+      let sellable = player.inv.sellableItems()
+      if sellable.len > 0:
+        let cursor = player.sellItemCursor mod max(1, sellable.len)
+        let itemName = itemShortName(sellable[cursor])
+        sim.fb.blitText(sim.letterSprites, itemName, 2, ScreenHeight - 11)
+    sim.fb.renderNumber(sim.digitSprites, player.sellPrice, 50, ScreenHeight - 11)
+    if sim.letterSprites.len > 0:
+      sim.fb.blitText(sim.letterSprites, "G", 50 + 24, ScreenHeight - 11)
+  if player.state == AtBuyStall:
+    for px in 0 ..< ScreenWidth:
+      for py in ScreenHeight - 20 ..< ScreenHeight:
+        sim.fb.putPixel(px, py, 0)
+    if sim.letterSprites.len > 0:
+      sim.fb.blitText(sim.letterSprites, "BUY", 2, ScreenHeight - 18)
+      let itemName = itemShortName(ItemKind(player.buyItemCursor mod (ord(high(ItemKind)) + 1)))
+      sim.fb.blitText(sim.letterSprites, itemName, 2, ScreenHeight - 11)
+    sim.fb.renderNumber(sim.digitSprites, player.buyQuantity, 50, ScreenHeight - 11)
+    if sim.letterSprites.len > 0:
+      sim.fb.blitText(sim.letterSprites, "X", 50 + 18, ScreenHeight - 11)
+
+proc render*(sim: var SimServer, playerIndex: int): seq[uint8] =
+  sim.fb.clearFrame(FloorBackdropColor)
+  if playerIndex < 0 or playerIndex >= sim.players.len:
+    return sim.fb.packed
+  let player = sim.players[playerIndex]
+  let
+    cameraX = worldClampPixel(
+      player.x + player.sprite.width div 2 - ScreenWidth div 2,
+      WorldWidthPixels - ScreenWidth
+    )
+    cameraY = worldClampPixel(
+      player.y + player.sprite.height div 2 - ScreenHeight div 2,
+      WorldHeightPixels - ScreenHeight
+    )
+  sim.renderTerrain(cameraX, cameraY)
+  sim.renderObjects(cameraX, cameraY)
+  sim.renderSelection(playerIndex, cameraX, cameraY)
+  sim.renderActionProgress(playerIndex, cameraX, cameraY)
+  sim.renderPlayers(cameraX, cameraY)
+  sim.renderHud(playerIndex)
+  sim.fb.packFramebuffer()
+  sim.fb.packed

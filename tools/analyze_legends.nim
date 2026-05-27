@@ -1,14 +1,11 @@
 import std/[algorithm, json, os, parseopt, strformat, strutils]
 import
-  ../sim,
-  ../replays,
-  ../legends
+  marketboard/sim,
+  marketboard/replays,
+  marketboard/legends
 
 proc analyzeReplay(replayPath: string, verbose: bool): tuple[json: JsonNode, summary: string, topScore: float] =
   let absReplayPath = absolutePath(replayPath)
-  let previousDir = getCurrentDir()
-  setCurrentDir(getCurrentDir() / "marketboard")
-  defer: setCurrentDir(previousDir)
 
   let data = loadMbReplay(absReplayPath)
   var sim = initSimServer(0)

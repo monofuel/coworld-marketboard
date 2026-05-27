@@ -1,4 +1,4 @@
-import std/[json, monotimes, os, parseopt, strformat, strutils, times]
+import std/[json, monotimes, os, parseopt, strutils, times]
 import pixie, silky, windy
 import bitworld/protocol, bitworld/server, marketboard/sim, marketboard/replays, marketboard/legends
 
@@ -23,15 +23,6 @@ type
     activeOverlay: string
     overlayTicksLeft: int
 
-proc repoDir(): string =
-  getCurrentDir()
-
-proc clientDataDir(): string =
-  repoDir() / "client" / "data"
-
-proc palettePath(): string =
-  clientDataDir() / "pallete.png"
-
 proc unpack4bpp(packed: openArray[uint8], unpacked: var seq[uint8]) =
   let targetLen = packed.len * 2
   if unpacked.len != targetLen:
@@ -52,7 +43,6 @@ proc initViewer(): ReplayViewerApp =
   result.statusText = "Drop a .mbreplay file or pass --load path"
   result.legendsEnabled = true
 
-  loadPalette(palettePath())
   result.sim.loadRenderAssets()
 
   let builder = newAtlasBuilder(64, 2)

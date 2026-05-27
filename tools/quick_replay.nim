@@ -1,10 +1,10 @@
 import std/[os, osproc, strutils, parseopt, strformat]
 
 const
-  BatchSource = "marketboard" / "tools" / "batch_market.nim"
-  ViewerSource = "marketboard" / "replay_viewer.nim"
-  FullmapSource = "marketboard" / "fullmap_viewer.nim"
-  HeadlessSource = "marketboard" / "tools" / "headless_sim.nim"
+  BatchSource = "tools" / "batch_market.nim"
+  ViewerSource = "src" / "marketboard" / "replay_viewer.nim"
+  FullmapSource = "src" / "marketboard" / "fullmap_viewer.nim"
+  HeadlessSource = "tools" / "headless_sim.nim"
   DefaultTicks = 10000
   DefaultReplayDir = "replays"
 
@@ -31,12 +31,14 @@ when isMainModule:
     echo "Unable to find 'nim' on PATH."
     quit(1)
 
+  const NimPaths = "--path:src --path:players"
+
   if headless:
     echo "Running headless sim..."
-    quit(execCmd(&"{nimExe} r {HeadlessSource} --ticks:{ticks} --interval:{checkpointInterval}"))
+    quit(execCmd(&"{nimExe} r {NimPaths} {HeadlessSource} --ticks:{ticks} --interval:{checkpointInterval}"))
   else:
     echo &"Recording 1 match ({ticks} ticks)..."
-    var rc = execCmd(&"{nimExe} r {BatchSource} --matches:1 --ticks:{ticks} --fixed-lineup")
+    var rc = execCmd(&"{nimExe} r {NimPaths} {BatchSource} --matches:1 --ticks:{ticks} --fixed-lineup")
     if rc != 0:
       echo "Match recording failed."
       quit(rc)
@@ -48,4 +50,4 @@ when isMainModule:
 
     let activeViewer = if playerCam: ViewerSource else: FullmapSource
     echo "Opening replay viewer..."
-    quit(execCmd(&"{nimExe} r {activeViewer} {replayPath}"))
+    quit(execCmd(&"{nimExe} r {NimPaths} {activeViewer} {replayPath}"))

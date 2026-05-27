@@ -1,20 +1,20 @@
 import std/[algorithm, json, os, parseopt, random, strformat, strutils]
 import
-  ../sim,
-  ../excitement,
-  ../legends,
-  ../replays,
-  ../players/common,
-  ../players/still_forge as sf,
-  ../players/iron_works as iw,
-  ../players/colm as colm_bot,
-  ../players/zorori as zr,
-  ../players/solenne as sol,
-  ../players/rkhenna as rk,
-  ../players/pipitori as pip,
-  ../players/kukumo as kuku,
-  ../players/ktorra as kt,
-  ../players/staelhart as stael
+  marketboard/sim,
+  marketboard/excitement,
+  marketboard/legends,
+  marketboard/replays,
+  common,
+  still_forge as sf,
+  iron_works as iw,
+  colm as colm_bot,
+  zorori as zr,
+  solenne as sol,
+  rkhenna as rk,
+  pipitori as pip,
+  kukumo as kuku,
+  ktorra as kt,
+  staelhart as stael
 
 const
   DefaultMatches = 100
@@ -266,9 +266,7 @@ proc parseArgs(): BatchConfig =
       discard
 
 proc run(config: BatchConfig) =
-  let previousDir = getCurrentDir()
   let rootDir = getCurrentDir()
-  setCurrentDir(rootDir / "marketboard")
 
   createDir(rootDir / config.replayDir)
 
@@ -285,8 +283,6 @@ proc run(config: BatchConfig) =
 
     let lineupStr = res.lineup.join(", ")
     echo &"  match {seed:4d}: score={res.score:8.2f}  legends={res.legendEventCount:3d}  bots=[{lineupStr}]"
-
-  setCurrentDir(previousDir)
 
   results.sort(proc(a, b: MatchResult): int = cmp(b.score, a.score))
 

@@ -1,18 +1,18 @@
 import std/[algorithm, json, os, parseopt, random, strformat, strutils, tables]
 import
-  ../sim,
-  ../replays,
-  ../players/common,
-  ../players/still_forge as sf,
-  ../players/iron_works as iw,
-  ../players/colm as colm_bot,
-  ../players/zorori as zr,
-  ../players/solenne as sol,
-  ../players/rkhenna as rk,
-  ../players/pipitori as pip,
-  ../players/kukumo as kuku,
-  ../players/ktorra as kt,
-  ../players/staelhart as stael
+  marketboard/sim,
+  marketboard/replays,
+  common,
+  still_forge as sf,
+  iron_works as iw,
+  colm as colm_bot,
+  zorori as zr,
+  solenne as sol,
+  rkhenna as rk,
+  pipitori as pip,
+  kukumo as kuku,
+  ktorra as kt,
+  staelhart as stael
 
 const
   BotCount = 10
@@ -222,12 +222,9 @@ proc parseArgs(): DiagConfig =
     of cmdArgument: discard
 
 proc run(config: DiagConfig) =
-  let previousDir = getCurrentDir()
-  setCurrentDir(getCurrentDir() / "marketboard")
-
-  createDir(previousDir / "tmp")
-  var traceFile = open(previousDir / "tmp/diag_trace.txt", fmWrite)
-  var reportFile = open(previousDir / "tmp/diag_report.txt", fmWrite)
+  createDir("tmp")
+  var traceFile = open("tmp/diag_trace.txt", fmWrite)
+  var reportFile = open("tmp/diag_report.txt", fmWrite)
 
   var rng = initRand(config.seed)
   let lineup = generateLineup(rng, config.fixedLineup)
@@ -493,8 +490,6 @@ proc run(config: DiagConfig) =
 
   reportFile.close()
   echo &"Wrote tmp/diag_trace.txt and tmp/diag_report.txt"
-
-  setCurrentDir(previousDir)
 
 when isMainModule:
   try:
