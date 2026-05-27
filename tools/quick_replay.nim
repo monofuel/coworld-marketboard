@@ -31,7 +31,7 @@ when isMainModule:
     echo "Unable to find 'nim' on PATH."
     quit(1)
 
-  const NimPaths = "--path:src --path:players"
+  let NimPaths = "--path:src --path:players --path:" & getHomeDir() / ".nimby" / "pkgs" / "bitworld"
 
   if headless:
     echo "Running headless sim..."

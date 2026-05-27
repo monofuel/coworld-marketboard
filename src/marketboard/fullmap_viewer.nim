@@ -1,9 +1,9 @@
 ## Desktop replay viewer — requires bitworld desktop client libs (windy/opengl).
 ## Not compiled as part of the container image.
-import std/[monotimes, os, parseopt, strutils]
+import std/[monotimes, os, parseopt]
 import pixie, supersnappy, windy
 import bitworld/protocol, marketboard/sim, marketboard/replays
-import bitworld/client/global_client
+import client/global_client
 
 const
   MapLayerId = 0
@@ -31,14 +31,14 @@ type
     initialized: bool
     inputPackets: seq[string]
 
-proc repoDir(): string =
-  getCurrentDir()
+proc bitworldClientDir(): string =
+  getHomeDir() / ".nimby" / "pkgs" / "bitworld" / "client"
 
 proc clientDataDir(): string =
-  repoDir() / "client" / "data"
+  bitworldClientDir() / "data"
 
 proc clientDistDir(): string =
-  repoDir() / "client" / "dist"
+  bitworldClientDir() / "dist"
 
 proc addU8(packet: var seq[uint8], value: uint8) =
   packet.add(value)
