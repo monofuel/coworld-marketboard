@@ -2,6 +2,7 @@ import mummy
 import bitworld/protocol except TileSize
 import bitworld/cogame_runtime
 import marketboard/sim
+import marketboard/sprite_render
 import std/[json, locks, monotimes, os, parseopt, strutils, tables, times]
 
 const
@@ -23,6 +24,7 @@ type
     closedSockets: seq[WebSocket]
     rewardViewers: Table[WebSocket, bool]
     stateViewers: Table[WebSocket, bool]
+    spriteViewerStates: Table[WebSocket, PlayerViewerState]
     resetRequested: bool
 
   ServerThreadArgs = object
@@ -41,6 +43,7 @@ proc initAppState() =
   appState.closedSockets = @[]
   appState.rewardViewers = initTable[WebSocket, bool]()
   appState.stateViewers = initTable[WebSocket, bool]()
+  appState.spriteViewerStates = initTable[WebSocket, PlayerViewerState]()
   appState.resetRequested = false
 
 proc playerInputFromMasks(currentMask, previousMask: uint8): PlayerInput =
@@ -59,6 +62,8 @@ proc removePlayer(sim: var SimServer, websocket: WebSocket) =
     appState.rewardViewers.del(websocket)
   if websocket in appState.stateViewers:
     appState.stateViewers.del(websocket)
+  if websocket in appState.spriteViewerStates:
+    appState.spriteViewerStates.del(websocket)
   if websocket notin appState.playerIndices:
     return
 
@@ -94,6 +99,21 @@ proc playerIdentity(request: Request): string =
     return parts[0] & ":" & parts[1]
   request.remoteAddress
 
+proc clientDir(): string =
+  let nimbyDir = getHomeDir() / ".nimby" / "pkgs" / "bitworld" / "client"
+  if dirExists(nimbyDir): return nimbyDir
+  getCurrentDir() / "client"
+
+proc serveStaticFile(request: Request, path, contentType: string) =
+  if fileExists(path):
+    var headers: HttpHeaders
+    headers["Content-Type"] = contentType
+    request.respond(200, headers, readFile(path))
+  else:
+    var headers: HttpHeaders
+    headers["Content-Type"] = "text/plain"
+    request.respond(404, headers, "Not found")
+
 proc httpHandler(request: Request) =
   if request.path == WebSocketPath and request.httpMethod == "GET":
     let websocket = request.upgradeToWebSocket()
@@ -111,6 +131,12 @@ proc httpHandler(request: Request) =
     {.gcsafe.}:
       withLock appState.lock:
         appState.rewardViewers[websocket] = true
+  elif request.path in ["/", "/player_client.html"]:
+    serveStaticFile(request, clientDir() / "player_client.html", "text/html")
+  elif request.path == "/global_client.html":
+    serveStaticFile(request, clientDir() / "global_client.html", "text/html")
+  elif request.path == "/snappyjs.min.js":
+    serveStaticFile(request, clientDir() / "snappyjs.min.js", "application/javascript")
   else:
     var headers: HttpHeaders
     headers["Content-Type"] = "text/plain"
@@ -135,10 +161,12 @@ proc websocketHandler(
           appState.inputMasks[websocket] = 0
           appState.lastAppliedMasks[websocket] = 0
   of MessageEvent:
-    if message.kind == BinaryMessage and isInputPacket(message.data):
+    if message.kind == BinaryMessage and (isInputPacket(message.data) or isSpriteInputPacket(message.data)):
       {.gcsafe.}:
         withLock appState.lock:
-          let mask = blobToMask(message.data)
+          let mask =
+            if isSpriteInputPacket(message.data): spriteInputMask(message.data)
+            else: blobToMask(message.data)
           if mask == 255'u8:
             appState.resetRequested = true
             appState.inputMasks[websocket] = 0
@@ -252,9 +280,13 @@ proc runServerLoop(
             else:
               sockets.add(websocket)
               playerIndices.add(appState.playerIndices[websocket])
+          for _, vs in appState.spriteViewerStates.mpairs:
+            vs.initialized = false
       for i in 0 ..< sockets.len:
-        let frameBlob = blobFromBytes(sim.render(playerIndices[i]))
-        sockets[i].send(frameBlob, BinaryMessage)
+        var vs = appState.spriteViewerStates.mgetOrPut(sockets[i], PlayerViewerState())
+        let packet = buildFramePacket(sim, playerIndices[i], vs)
+        appState.spriteViewerStates[sockets[i]] = vs
+        sockets[i].send(blobFromBytes(packet), BinaryMessage)
       for i in 0 ..< stateViewerSockets.len:
         stateViewerSockets[i].send(sim.buildStateJson(stateViewerIndices[i]), TextMessage)
       let rewardPacket = sim.buildRewardPacket()
@@ -266,9 +298,11 @@ proc runServerLoop(
     sim.step(inputs)
 
     for i in 0 ..< sockets.len:
-      let frameBlob = blobFromBytes(sim.render(playerIndices[i]))
       try:
-        sockets[i].send(frameBlob, BinaryMessage)
+        var vs = appState.spriteViewerStates.mgetOrPut(sockets[i], PlayerViewerState())
+        let packet = buildFramePacket(sim, playerIndices[i], vs)
+        appState.spriteViewerStates[sockets[i]] = vs
+        sockets[i].send(blobFromBytes(packet), BinaryMessage)
       except:
         {.gcsafe.}:
           withLock appState.lock:

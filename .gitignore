@@ -1,6 +1,9 @@
 nimcache/
 *.exe
+*.out
 /marketboard
+/marketboard_server
 /out/
+/replays/
 nim.cfg
 nimby.paths
