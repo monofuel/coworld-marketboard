@@ -1417,6 +1417,21 @@ proc renderPlayers*(sim: var SimServer, cameraX, cameraY: int) =
         for px in 0 ..< 3:
           sim.fb.putPixel(screenX + px, screenY + py, color)
 
+proc effectiveActionWork*(sim: SimServer, player: Player): int =
+  ## Returns the total work units for the player's current gather/craft action,
+  ## used to scale progress bars. Returns 1 for idle players or unknown targets.
+  case player.state
+  of Gathering:
+    player.effectiveGatherWork()
+  of Crafting:
+    let targetIdx = player.actionTargetIndex
+    if targetIdx >= 0 and targetIdx < sim.objects.len:
+      craftWorkForTier(gearTier(sim.objects[targetIdx].craftStationItem()))
+    else:
+      1
+  else:
+    1
+
 proc drawProgressBar*(sim: var SimServer, progress, total, screenX, screenY: int) =
   let filledWidth = max(1, min(ProgressBarWidth, (progress * ProgressBarWidth + total - 1) div total))
   for px in 0 ..< ProgressBarWidth:
@@ -1518,13 +1533,8 @@ proc renderHud*(sim: var SimServer, playerIndex: int) =
         if hint.len > 0:
           let hintX = (ScreenWidth - hint.len * 6) div 2
           sim.fb.blitText(sim.letterSprites, hint, hintX, ScreenHeight - 7)
-  if player.state == Gathering:
-    sim.drawProgressBar(player.actionProgress, player.effectiveGatherWork(), 50, ScreenHeight - 5)
-  elif player.state == Crafting:
-    let targetIdx = player.actionTargetIndex
-    if targetIdx >= 0 and targetIdx < sim.objects.len:
-      let gear = sim.objects[targetIdx].craftStationItem()
-      sim.drawProgressBar(player.actionProgress, craftWorkForTier(gearTier(gear)), 50, ScreenHeight - 5)
+  if player.state in {Gathering, Crafting}:
+    sim.drawProgressBar(player.actionProgress, sim.effectiveActionWork(player), 50, ScreenHeight - 5)
   if player.state == AtSellStall:
     for px in 0 ..< ScreenWidth:
       for py in ScreenHeight - 20 ..< ScreenHeight:

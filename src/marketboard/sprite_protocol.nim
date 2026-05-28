@@ -92,6 +92,10 @@ proc addObject*(
 proc addClearObjects*(packet: var seq[uint8]) =
   packet.addU8(0x04)
 
+proc addRemoveObject*(packet: var seq[uint8], objectId: int) =
+  packet.addU8(0x03)
+  packet.addU16(objectId)
+
 proc makeRgbaTile*(paletteColor: uint8): seq[uint8] =
   let rgba = Palette[paletteColor and 0x0f]
   result = newSeq[uint8](TileSize * TileSize * 4)

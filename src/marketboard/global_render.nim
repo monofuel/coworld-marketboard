@@ -16,22 +16,27 @@ const
 
   ProgressSpriteBase = 200
   ScoreboardTextSpriteBase = 300
-  NameLabelSpriteBase = 400
+  PlayerIdentitySpriteBase = 600
+  SwatchSpriteBase = 700
   LegendTextSpriteId = 500
 
   TileObjectBase = 0
   WorldObjectObjBase = 3000
   PlayerObjectBase = 4000
   SignalObjectBase = 4500
-  NameLabelObjectBase = 4600
   ProgressObjectBase = 4700
   SelectionObjectBase = 5000
   ScoreboardRowObjectBase = 6000
+  SwatchObjectBase = 8000
   LegendObjectId = 7000
 
   ProgressBarWidth = 16
   ProgressBarHeight = 3
   MaxPlayers = 20
+
+  # Distinct identity colors assigned to agents by slot, so a viewer can
+  # follow a personality on the map and match it to the scoreboard swatch.
+  PlayerColors = [3, 7, 8, 11, 14, 9, 4, 6, 13, 1]
 
 type
   GlobalViewerState* = object
@@ -42,6 +47,10 @@ proc roleLabel(role: Role): string =
   of NoRole: ""
   of Gatherer: "G"
   of Crafter: "C"
+
+proc playerColorIndex(idx: int): int =
+  ## Returns the identity-color slot for a player, by their seat index.
+  idx mod PlayerColors.len
 
 proc buildGlobalInitPacket*(sim: SimServer): seq[uint8] =
   var packet: seq[uint8]
@@ -56,6 +65,12 @@ proc buildGlobalInitPacket*(sim: SimServer): seq[uint8] =
   packet.addViewport(LegendLayerId, LegendWidth, LegendHeight)
 
   packet.addCommonSprites()
+
+  # Per-agent identity sprites: a uniquely colored body and a matching
+  # scoreboard swatch, so a viewer can follow a personality on the map.
+  for i, color in PlayerColors:
+    packet.addSprite(PlayerIdentitySpriteBase + i, 7, 7, makeRgbaPlayer(color.uint8), "Agent " & $i)
+    packet.addSprite(SwatchSpriteBase + i, TileSize, TileSize, makeRgbaTile(color.uint8), "Swatch " & $i)
 
   # Static terrain tiles
   for ty in 0 ..< WorldHeightTiles:
@@ -96,49 +111,35 @@ proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState): seq[
       swap(playerOrder[j], playerOrder[j - 1])
       dec j
 
-  var signalCount = 0
   for idx in playerOrder:
     let player = sim.players[idx]
     let z = 2 + player.y
-    packet.addObject(PlayerObjectBase + idx, player.x, player.y, z, MapLayerId, playerSpriteId(player.role))
+    packet.addObject(PlayerObjectBase + idx, player.x, player.y, z, MapLayerId, PlayerIdentitySpriteBase + playerColorIndex(idx))
 
-    # Signal icon above player
+    # Signal icon above player, removed when the player stops signaling.
     if player.signalIcon >= 0:
-      let sigX = player.x + 2
-      let sigY = player.y - 4
-      packet.addObject(SignalObjectBase + signalCount, sigX, sigY, z + 1, MapLayerId, signalSpriteId(player.signalIcon))
-      inc signalCount
+      packet.addObject(SignalObjectBase + idx, player.x + 2, player.y - 4, z + 1, MapLayerId, signalSpriteId(player.signalIcon))
+    else:
+      packet.addRemoveObject(SignalObjectBase + idx)
 
-    # Progress bar for active players
+    # Gather/craft progress bar, removed when the player goes idle.
     if player.state in {Gathering, Crafting} and player.actionProgress > 0:
-      let fill = clamp(player.actionProgress * ProgressBarWidth div 100, 0, ProgressBarWidth)
+      let totalWork = sim.effectiveActionWork(player)
+      let fill = clamp(player.actionProgress * ProgressBarWidth div max(1, totalWork), 0, ProgressBarWidth)
       let barSpriteId = ProgressSpriteBase + idx
-      let barPixels = makeRgbaProgressBar(fill, ProgressBarWidth, ProgressBarHeight)
-      packet.addSprite(barSpriteId, ProgressBarWidth, ProgressBarHeight, barPixels)
-      let barX = player.x - (ProgressBarWidth - 7) div 2
-      let barY = player.y - 6
-      packet.addObject(ProgressObjectBase + idx, barX, barY, z + 2, MapLayerId, barSpriteId)
+      packet.addSprite(barSpriteId, ProgressBarWidth, ProgressBarHeight, makeRgbaProgressBar(fill, ProgressBarWidth, ProgressBarHeight))
+      packet.addObject(ProgressObjectBase + idx, player.x - (ProgressBarWidth - 7) div 2, player.y - 6, z + 2, MapLayerId, barSpriteId)
+    else:
+      packet.addRemoveObject(ProgressObjectBase + idx)
 
-    # Player name label
-    let label = player.name
-    if label.len > 0:
-      let labelPixels = renderTextToRgba(label, 2)
-      if labelPixels.len > 0:
-        let labelWidth = MbFont.textWidth(label)
-        let labelHeight = MbFont.height
-        let labelSpriteId = NameLabelSpriteBase + idx
-        packet.addSprite(labelSpriteId, labelWidth, labelHeight, labelPixels)
-        let labelX = player.x + 3 - labelWidth div 2
-        let labelY = player.y + 8
-        packet.addObject(NameLabelObjectBase + idx, labelX, labelY, z + 1, MapLayerId, labelSpriteId)
+    # Selection highlight, removed while gathering/crafting or with no target.
+    let target = sim.bestInteractionTile(player)
+    if player.state notin {Gathering, Crafting} and inTileBounds(target.tx, target.ty):
+      packet.addObject(SelectionObjectBase + idx, target.tx * TileSize, target.ty * TileSize, 2, MapLayerId, SelectionSpriteId)
+    else:
+      packet.addRemoveObject(SelectionObjectBase + idx)
 
-    # Selection highlight
-    if player.state notin {Gathering, Crafting}:
-      let target = sim.bestInteractionTile(player)
-      if inTileBounds(target.tx, target.ty):
-        packet.addObject(SelectionObjectBase + idx, target.tx * TileSize, target.ty * TileSize, 2, MapLayerId, SelectionSpriteId)
-
-  # Scoreboard: two lines per player
+  # Scoreboard: identity swatch + two lines per player
   var rowSlot = 0
   for i, player in sim.players:
     if i >= MaxPlayers:
@@ -154,21 +155,26 @@ proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState): seq[
     if totalMats > 0:
       line2.add " " & $totalMats & " mat"
 
+    let
+      textX = 2 + TileSize + 2
+      rowY1 = 2 + rowSlot * (MbFont.height + 1)
+
+    # Identity swatch aligned with the name line.
+    packet.addObject(SwatchObjectBase + i, 2, rowY1, 0, ScoreboardLayerId, SwatchSpriteBase + playerColorIndex(i))
+
     let line1Pixels = renderTextToRgba(line1, 2)
     if line1Pixels.len > 0:
       let spriteId = ScoreboardTextSpriteBase + rowSlot
       packet.addSprite(spriteId, MbFont.textWidth(line1), MbFont.height, line1Pixels)
-      let rowY = 2 + rowSlot * (MbFont.height + 1)
-      packet.addObject(ScoreboardRowObjectBase + rowSlot, 2, rowY, 0, ScoreboardLayerId, spriteId)
+      packet.addObject(ScoreboardRowObjectBase + rowSlot, textX, rowY1, 0, ScoreboardLayerId, spriteId)
     inc rowSlot
 
     let line2Pixels = renderTextToRgba(line2, 2)
     if line2Pixels.len > 0:
       let spriteId = ScoreboardTextSpriteBase + rowSlot
       packet.addSprite(spriteId, MbFont.textWidth(line2), MbFont.height, line2Pixels)
-      let rowY = 2 + rowSlot * (MbFont.height + 1)
-      let indentX = 2 + MbFont.glyphAdvance(' ') * 2
-      packet.addObject(ScoreboardRowObjectBase + rowSlot, indentX, rowY, 0, ScoreboardLayerId, spriteId)
+      let rowY2 = 2 + rowSlot * (MbFont.height + 1)
+      packet.addObject(ScoreboardRowObjectBase + rowSlot, textX + MbFont.glyphAdvance(' ') * 2, rowY2, 0, ScoreboardLayerId, spriteId)
     inc rowSlot
 
   packet
