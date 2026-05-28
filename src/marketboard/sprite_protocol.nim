@@ -299,7 +299,7 @@ proc addCommonSprites*(packet: var seq[uint8]) =
   ## used by both the player-camera and global-spectator views.
   packet.addSprite(TileGrassSpriteId, TileSize, TileSize, makeRgbaTile(3), "Grass")
   packet.addSprite(TilePathSpriteId, TileSize, TileSize, makeRgbaTile(13), "Path")
-  packet.addSprite(TileWallSpriteId, TileSize, TileSize, makeRgbaTile(1), "Wall")
+  packet.addSprite(TileWallSpriteId, TileSize, TileSize, makeRgbaTile(5), "Wall")
 
   packet.addSprite(ObjectSpriteBase, TileSize, TileSize, makeRgbaOutlined(11, 4, TileSize), "Wood")
   packet.addSprite(ObjectSpriteBase + 1, TileSize, TileSize, makeRgbaOutlined(6, 5, TileSize), "Stone")

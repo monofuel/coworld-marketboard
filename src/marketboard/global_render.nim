@@ -39,9 +39,9 @@ type
 
 proc roleLabel(role: Role): string =
   case role
-  of NoRole: "new"
-  of Gatherer: "gatherer"
-  of Crafter: "crafter"
+  of NoRole: ""
+  of Gatherer: "G"
+  of Crafter: "C"
 
 proc buildGlobalInitPacket*(sim: SimServer): seq[uint8] =
   var packet: seq[uint8]
@@ -122,7 +122,7 @@ proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState): seq[
     # Player name label
     let label = player.name
     if label.len > 0:
-      let labelPixels = renderTextToRgba(label, 15)
+      let labelPixels = renderTextToRgba(label, 2)
       if labelPixels.len > 0:
         let labelWidth = MbFont.textWidth(label)
         let labelHeight = MbFont.height
@@ -144,16 +144,17 @@ proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState): seq[
     if i >= MaxPlayers:
       break
     let displayName = if player.name.len > 12: player.name[0 ..< 12] else: player.name
-    let line1 = displayName & " " & roleLabel(player.role)
+    let roleTag = roleLabel(player.role)
+    let line1 = if roleTag.len > 0: displayName & " " & roleTag else: displayName
     let gearCount = player.equippedGearCount()
     let totalMats = player.inv.wood + player.inv.stone +
       player.inv.hardwood + player.inv.copper +
       player.inv.ironwood + player.inv.iron
     var line2 = $player.gold & "g " & $gearCount & "/" & $GearSlotCount
     if totalMats > 0:
-      line2.add " m" & $totalMats
+      line2.add " " & $totalMats & " mat"
 
-    let line1Pixels = renderTextToRgba(line1, 15)
+    let line1Pixels = renderTextToRgba(line1, 2)
     if line1Pixels.len > 0:
       let spriteId = ScoreboardTextSpriteBase + rowSlot
       packet.addSprite(spriteId, MbFont.textWidth(line1), MbFont.height, line1Pixels)
@@ -161,12 +162,13 @@ proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState): seq[
       packet.addObject(ScoreboardRowObjectBase + rowSlot, 2, rowY, 0, ScoreboardLayerId, spriteId)
     inc rowSlot
 
-    let line2Pixels = renderTextToRgba(line2, 6)
+    let line2Pixels = renderTextToRgba(line2, 2)
     if line2Pixels.len > 0:
       let spriteId = ScoreboardTextSpriteBase + rowSlot
       packet.addSprite(spriteId, MbFont.textWidth(line2), MbFont.height, line2Pixels)
       let rowY = 2 + rowSlot * (MbFont.height + 1)
-      packet.addObject(ScoreboardRowObjectBase + rowSlot, 2, rowY, 0, ScoreboardLayerId, spriteId)
+      let indentX = 2 + MbFont.glyphAdvance(' ') * 2
+      packet.addObject(ScoreboardRowObjectBase + rowSlot, indentX, rowY, 0, ScoreboardLayerId, spriteId)
     inc rowSlot
 
   packet
