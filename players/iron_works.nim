@@ -72,7 +72,8 @@ proc decide*(bot: var BotState, state: GameState): uint8 =
       if (shouldCancelListings(p) or shouldCancelForUpgrade(p)) and not p.hasFullGearSet(3):
         bot.phase = PathToCancelStall
       elif p.inv.hasAnyGear and p.canSellMore and
-           (not p.hasFullGearSet(3) and bot.cancelCycles < 3 or p.hasHighTierGearInv(maxTier)):
+           (not p.hasFullGearSet(3) and bot.cancelCycles < 3 or p.hasHighTierGearInv(maxTier)) and
+           bot.ticksInPhase > 20:   # Iteration 5: light batching guard so IronWorks commits more before dumping gear
         bot.phase = PathToSellStall
       elif hasEnoughMaterialsForCraft(p.inv):
         bot.phase = PathToCraftStation

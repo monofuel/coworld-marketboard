@@ -18,7 +18,7 @@ const KtorraWeights* = PersonalityWeights(
   gatherStoneBias: 1.0,
   sellUrgency: 2.0,
   gearPriority: 2.5,
-  batchPatience: 0.5,
+  batchPatience: 0.8,   # Iteration 6: small bump from 0.5 to allow slightly better batching before flipping/selling. Still very opportunistic, but creates a bit more build-up and sharper later reactions for drama.
   interruptThreshold: 1.5,
 )
 

@@ -102,7 +102,11 @@ proc decide*(bot: var BotState, state: GameState): uint8 =
     return ButtonA
 
   of PathToWoodNode:
-    if p.hasSellableMaterials and p.canSellMore:
+    # Iteration 4 tweak: light batching guard for the reliable wood gatherer.
+    # StillForge still gathers steadily, but now waits a bit before selling.
+    # Goal: better batching under pressure, leading to more pronounced
+    # scarcity effects when hoarders are present (better TV drama).
+    if p.hasSellableMaterials and p.canSellMore and bot.ticksInPhase > 20:
       bot.phase = PathToSellStall
       bot.ticksInPhase = 0
       return 0
