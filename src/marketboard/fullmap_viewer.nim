@@ -97,15 +97,10 @@ proc initFullmapViewer*(): FullmapViewer =
   result = FullmapViewer()
   result.sim = initSimServer(0)
   loadRenderAssets(result.sim)
-  result.app = initGlobalApp(
-    options = GlobalOptions(
-      title: "Marketboard Fullmap Viewer",
-      atlasPath: clientDistDir() / "atlas.png",
-      palettePath: clientDataDir() / "pallete.png",
-      packetSink: proc(packet: string) = discard
-    )
-  )
-  result.app.setStatus("Drop a .mbreplay file or pass --load path")
+  # Do NOT create app here — live path will create the correct spectator one.
+  # Replay path will create its own in loadReplay.
+  result.app = nil
+  # replay remains uninitialized (nil) for live path
 
 proc loadReplay*(viewer: FullmapViewer, path: string) =
   if not fileExists(path):
@@ -126,7 +121,11 @@ proc tick*(viewer: FullmapViewer) =
   viewer.app.handleInput()
 
   if viewer.loaded:
-    if viewer.replay.playing:
+    # Live mode: the real WebSocket (via global_client) calls parseMessage directly.
+    # We only drive local legend events + maybeFit/draw. No replay in live mode.
+    # replay is a value object (MbReplayPlayer), not a ref, so we detect "real replay loaded"
+    # by the presence of actual replay data (populated only by loadReplay / file drop).
+    if viewer.replay.data.gameName.len > 0 and viewer.replay.playing:
       for _ in 0 ..< viewer.replay.replaySpeed():
         if viewer.replay.playing:
           viewer.replay.stepReplay(viewer.sim)
@@ -135,10 +134,7 @@ proc tick*(viewer: FullmapViewer) =
         viewer.replay.seekReplay(viewer.sim, 0)
         viewer.replay.playing = true
 
-    let packet = buildGlobalFramePacket(viewer.sim, viewer.viewerState)
-    if packet.len > 0:
-      viewer.app.parseMessage(blobFromBytes(packet))
-
+    # Local legend overlay (works for both live and replay)
     var slotTexts: array[LegendSlotCount, string]
     for i in 0 ..< LegendSlotCount:
       slotTexts[i] = viewer.legendSlots[i].text
@@ -167,21 +163,61 @@ proc installFileDrop*(viewer: FullmapViewer) =
       viewer.loadLegendsForReplay(fileName)
   )
 
-when isMainModule:
-  var replayPath = ""
+proc parseArgs(): tuple[address: string, replayPath: string] =
+  result.address = "ws://localhost:8080/global"
+  result.replayPath = ""
+
   for kind, key, value in getopt():
     case kind
     of cmdLongOption:
-      if key == "load" or key == "load-replay":
-        replayPath = value
+      if key == "address" or key == "load" or key == "load-replay":
+        if value.len > 0:
+          result.address = value
+          if not value.startsWith("ws://"):
+            result.address = "ws://" & value
+      elif key == "help" or key == "h":
+        echo "Usage: fullmap_viewer [--address:ws://localhost:8080/global] [replay.mbreplay]"
+        echo "  --address  Connect to live server global view (default)"
+        echo "             Pure spectator mode (no player input, clean for lobby TV)"
+        quit(0)
     of cmdArgument:
-      replayPath = key
+      if key.startsWith("ws://") or key.startsWith("wss://"):
+        result.address = key
+      else:
+        result.replayPath = key
     else: discard
 
-  let viewer = initFullmapViewer()
-  viewer.installFileDrop()
-  if replayPath.len > 0:
-    viewer.loadReplay(replayPath)
+when isMainModule:
+  let args = parseArgs()
+
+  # Live path must create app FIRST (before installFileDrop and tick loop)
+  var viewer: FullmapViewer
+  if args.address.len > 0 and args.address.startsWith("ws://"):
+    # Pure global spectator for lobby TV - let the real WebSocket handle packets
+    # (remove packetSink so global_client opens the connection and calls parseMessage)
+    let app = initGlobalApp(
+      address = args.address,
+      options = GlobalOptions(
+        title: "Marketboard Live Fullmap",
+        atlasPath: clientDistDir() / "atlas.png",
+        palettePath: clientDataDir() / "pallete.png",
+        playerMode: false
+      )
+    )
+    app.setStatus("")  # clean TV view - no prompts
+    viewer = FullmapViewer(
+      app: app,
+      sim: initSimServer(0),  # kept for local legend/events but not used for rendering
+      loaded: true,
+      viewerState: GlobalViewerState()
+    )
+    loadRenderAssets(viewer.sim)
+    viewer.installFileDrop()
+  else:
+    viewer = initFullmapViewer()
+    viewer.installFileDrop()
+    if args.replayPath.len > 0:
+      viewer.loadReplay(args.replayPath)
 
   var lastTick = getMonoTime()
   while viewer.windowOpen():
