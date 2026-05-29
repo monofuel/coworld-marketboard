@@ -1,6 +1,8 @@
-import std/[algorithm, json, os]
-import bitworld/server
-from bitworld/protocol import loadPalette, ScreenWidth, ScreenHeight
+import
+  std/[algorithm, json, os],
+  pixie,
+  bitworld/server
+from bitworld/protocol import Palette, ScreenWidth, ScreenHeight
 
 const
   MbTileSize* = 8
@@ -1248,7 +1250,14 @@ proc gameHash*(sim: SimServer): uint64 =
     result.mixHashInt(listing.priceEach)
 
 proc loadRenderAssets*(sim: var SimServer, palettePath, numbersPath, lettersPath: string) =
-  loadPalette(palettePath)
+  ## Load palette from our local data/pallete.png (the canonical one synced from
+  ## bitworld sibling) so that makeRgba* and object colors produce good terrain
+  ## instead of bright red grass. The bitworld loadPalette ignores its arg and
+  ## always uses its own embedded copy.
+  let img = readImage(palettePath)
+  if img.width >= 16 and img.height >= 1:
+    for x in 0 ..< 16:
+      Palette[x] = img[x, 0]
   sim.fb = initFramebuffer()
   sim.digitSprites = loadDigitSprites(numbersPath)
   if fileExists(lettersPath):
@@ -1258,7 +1267,7 @@ proc loadRenderAssets*(sim: var SimServer) =
   sim.loadRenderAssets("data" / "pallete.png", "data" / "numbers.png", "data" / "letters.png")
 
 const
-  FloorBackdropColor* = 3'u8
+  FloorBackdropColor* = 12'u8
   ProgressBarWidth* = 6
 
 proc worldClampPixel*(x, maxValue: int): int =
@@ -1282,9 +1291,9 @@ proc objectSprite*(obj: WorldObject): Sprite =
       makeOutlinedSprite(5, 1, MbTileSize)
     else:
       case obj.material
-      of WoodItem: makeOutlinedSprite(11, 4, MbTileSize)
+      of WoodItem: makeOutlinedSprite(6, 4, MbTileSize)
       of StoneItem: makeOutlinedSprite(6, 5, MbTileSize)
-      of HardwoodItem: makeOutlinedSprite(3, 4, MbTileSize)
+      of HardwoodItem: makeOutlinedSprite(7, 4, MbTileSize)
       of CopperItem: makeOutlinedSprite(9, 5, MbTileSize)
       of IronwoodItem: makeOutlinedSprite(2, 1, MbTileSize)
       of IronItem: makeOutlinedSprite(14, 1, MbTileSize)

@@ -121,21 +121,27 @@ proc makeRgbaOutlined*(fill, outline: uint8, size: int): seq[uint8] =
       result[offset + 3] = c.a
 
 proc makeRgbaPlayer*(paletteColor: uint8): seq[uint8] =
+  ## Returns a 7x7 RGBA player sprite in the given palette color. Improved
+  ## silhouette over the old square blob: small head, arms, torso, legs with
+  ## stance for better readability on the map and scoreboard swatches.
   let rgba = Palette[paletteColor and 0x0f]
   result = newSeq[uint8](7 * 7 * 4)
-  for y in 0 ..< 7:
-    for x in 0 ..< 7:
-      let offset = (y * 7 + x) * 4
-      let visible =
-        (y == 0 and x >= 2 and x <= 4) or
-        (y >= 1 and y <= 2 and x >= 1 and x <= 5) or
-        (y >= 3 and y <= 4 and x >= 2 and x <= 4) or
-        (y >= 5 and y <= 6 and (x == 1 or x == 2 or x == 4 or x == 5))
-      if visible:
-        result[offset] = rgba.r
-        result[offset + 1] = rgba.g
-        result[offset + 2] = rgba.b
-        result[offset + 3] = rgba.a
+  # Lit pixels: head, arms out, body, legs stance (single color silhouette)
+  const litPixels = [
+    (3, 0),
+    (2, 1), (3, 1), (4, 1),
+    (1, 2), (5, 2),
+    (2, 3), (3, 3), (4, 3),
+    (2, 4), (4, 4),
+    (2, 5), (4, 5),
+    (1, 6), (3, 6), (5, 6)
+  ]
+  for (x, y) in litPixels:
+    let offset = (y * 7 + x) * 4
+    result[offset] = rgba.r
+    result[offset + 1] = rgba.g
+    result[offset + 2] = rgba.b
+    result[offset + 3] = rgba.a
 
 proc makeRgbaSelection*(size: int): seq[uint8] =
   let rgba = Palette[10 and 0x0f]
@@ -301,13 +307,13 @@ proc signalSpriteId*(icon: int): int =
 proc addCommonSprites*(packet: var seq[uint8]) =
   ## Registers the shared tile, object, player, selection, and signal sprites
   ## used by both the player-camera and global-spectator views.
-  packet.addSprite(TileGrassSpriteId, TileSize, TileSize, makeRgbaTile(3), "Grass")
-  packet.addSprite(TilePathSpriteId, TileSize, TileSize, makeRgbaTile(13), "Path")
-  packet.addSprite(TileWallSpriteId, TileSize, TileSize, makeRgbaTile(5), "Wall")
+  packet.addSprite(TileGrassSpriteId, TileSize, TileSize, makeRgbaTile(11), "Grass")
+  packet.addSprite(TilePathSpriteId, TileSize, TileSize, makeRgbaTile(5), "Path")
+  packet.addSprite(TileWallSpriteId, TileSize, TileSize, makeRgbaTile(12), "Wall")
 
-  packet.addSprite(ObjectSpriteBase, TileSize, TileSize, makeRgbaOutlined(11, 4, TileSize), "Wood")
+  packet.addSprite(ObjectSpriteBase, TileSize, TileSize, makeRgbaOutlined(6, 4, TileSize), "Wood")
   packet.addSprite(ObjectSpriteBase + 1, TileSize, TileSize, makeRgbaOutlined(6, 5, TileSize), "Stone")
-  packet.addSprite(ObjectSpriteBase + 2, TileSize, TileSize, makeRgbaOutlined(3, 4, TileSize), "Hardwood")
+  packet.addSprite(ObjectSpriteBase + 2, TileSize, TileSize, makeRgbaOutlined(7, 4, TileSize), "Hardwood")
   packet.addSprite(ObjectSpriteBase + 3, TileSize, TileSize, makeRgbaOutlined(9, 5, TileSize), "Copper")
   packet.addSprite(ObjectSpriteBase + 4, TileSize, TileSize, makeRgbaOutlined(2, 1, TileSize), "Ironwood")
   packet.addSprite(ObjectSpriteBase + 5, TileSize, TileSize, makeRgbaOutlined(14, 1, TileSize), "Iron")
