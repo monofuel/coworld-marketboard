@@ -14,6 +14,7 @@ This project is part of the larger Coworld / Metta ecosystem. Key related reposi
 - **`../coworld-games/`** — Monorepo containing many Coworld games (`coworld-marketboard`, `coworld-crewrift`, `coworld-heartleaf`, etc.), shared Python tooling, `coworld/` framework, and game manifests. The canonical location for game-specific manifests and cross-game patterns.
 - **`../metta`** — Main Metta AI / alignment research monorepo. Contains the overarching agent infrastructure, evaluation harnesses, and where most high-level Coworld coordination happens.
 - **`../coworld-crewrift`** — Another Coworld game (sibling to marketboard). Useful reference for shared patterns, player bots, Docker setups, and manifest formats.
+- **`../marketboard-secret.md`** — Top-secret / experimental design notes (for authorized eyes only). **Do not reference specifics from it in public code, commits, or discussions.**
 
 See the root [`../AGENTS.md`](../AGENTS.md) for workspace-wide conventions (nimby, nix, dependency workflow, etc.).
 
