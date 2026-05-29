@@ -223,8 +223,7 @@ Full-trace diagnostic tool. Writes two files:
 - `tmp/diag_report.txt` — final summary with time breakdowns, economy state, per-bot assets
 
 ```
-nim c -o:tools/diagnose_bots tools/diagnose_bots.nim
-./tools/diagnose_bots --seed:0 --ticks:10000 --interval:2500 --fixed-lineup
+nim r tools/diagnose_bots.nim --seed:0 --ticks:10000 --interval:2500 --fixed-lineup
 ```
 
 Flags:
@@ -245,8 +244,7 @@ Report sections:
 Quick validation tool. Runs N matches and reports gear levels.
 
 ```
-nim c -o:tools/batch_market tools/batch_market.nim
-./tools/batch_market --matches:1 --ticks:10000 --fixed-lineup
+nim r tools/batch_market.nim --matches:1 --ticks:10000 --fixed-lineup
 ```
 
 Success criteria: at least one bot at T3 in 10k ticks. If not, bots need to be smarter — don't increase ticks.

@@ -107,7 +107,11 @@ proc decide*(bot: var BotState, state: GameState): uint8 =
     return ButtonA
 
   of PathToNode:
-    if p.hasSellableMaterials and p.canSellMore:
+    # Personality-preserving dampener: Zorori only re-evaluates selling after
+    # spending some time moving toward a node. This stops the EvaluateSell
+    # ↔ PathToNode thrashing while still letting him only sell under good
+    # scarcity conditions.
+    if p.hasSellableMaterials and p.canSellMore and bot.ticksInPhase > 25:
       bot.phase = EvaluateSell
       bot.ticksInPhase = 0
       return 0

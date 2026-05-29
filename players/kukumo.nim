@@ -18,7 +18,7 @@ const KukumoWeights* = PersonalityWeights(
   gatherStoneBias: 1.5,
   sellUrgency: 0.6,
   gearPriority: 1.2,
-  batchPatience: 2.0,
+  batchPatience: 2.2,  # slightly higher for this sprint — encourages longer, more visible hoarding crises (better droughts + cornering drama for legends/TV)
   interruptThreshold: 3.0,
 )
 

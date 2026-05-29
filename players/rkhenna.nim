@@ -81,7 +81,13 @@ proc decide*(bot: var BotState, state: GameState): uint8 =
     let gearPrice = cheapestPrice(state, gearItemForSlot(0, tier))
     let matCost = materialCostForGear(state, tier)
 
-    if matPrice >= MaterialScarcityThreshold:
+    # Sprint tweak: small hysteresis on role evaluation so R'khenna's flips
+    # are more decisive. This should produce cleaner "mass pivot" moments
+    # and better wealth reversals when the market shifts (good for TV legends).
+    if bot.ticksInPhase < 30:
+      # stick with previous decision for a bit
+      discard
+    elif matPrice >= MaterialScarcityThreshold:
       bot.wantedRole = "Gatherer"
     elif gearPrice < int.high and matCost < int.high and gearPrice > matCost * GearProfitThreshold:
       bot.wantedRole = "Crafter"

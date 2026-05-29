@@ -101,7 +101,11 @@ proc decide*(bot: var BotState, state: GameState): uint8 =
     return ButtonA
 
   of PathToNode:
-    if p.hasSellableMaterials and p.canSellMore:
+    # Personality-preserving dampener for the dedicated undercutter:
+    # Colm still always prices 1g below, but batches a little before flooding
+    # the market. This creates cleaner price pressure waves (more dramatic
+    # crashes and responses) instead of constant low-level noise.
+    if p.hasSellableMaterials and p.canSellMore and bot.ticksInPhase > 20:
       bot.phase = PathToSellStall
       bot.ticksInPhase = 0
       return 0

@@ -73,20 +73,28 @@ proc decide*(bot: var BotState, state: GameState): uint8 =
     return 0
 
   of EvaluateRole:
-    bot.ticksInPhase = 0
+    # Iteration 2 tweak: light hysteresis on role evaluation.
+    # Solenne still tries to fill gaps altruistically, but now commits
+    # a bit longer before flipping roles. Goal: cleaner "altruist in crisis"
+    # stories and more visible MassRoleSwitch or WealthReversal events.
     let target = nextGearTargetCached(state, p, bot.lastSeenListings)
-    let needsGear = not p.hasFullGearSet(3)
     let gearOnMarket = target.slot >= 0
-    let canAfford = canAffordAnyMaterial(state, p)
-    let hasMats = hasEnoughMaterialsForCraft(p.inv)
-    if needsGear and not gearOnMarket and (canAfford or hasMats):
-      bot.wantedRole = "Crafter"
-    elif needsGear and gearOnMarket and not hasAffordableGearUpgradeCached(state, p, bot.lastSeenListings) and canAfford:
-      bot.wantedRole = "Crafter"
-    elif p.role == "Crafter" and not canAfford and not hasMats:
-      bot.wantedRole = "Gatherer"
+
+    if bot.ticksInPhase < 25 and p.role != "NoRole":
+      bot.wantedRole = p.role
     else:
-      bot.wantedRole = "Gatherer"
+      bot.ticksInPhase = 0
+      let needsGear = not p.hasFullGearSet(3)
+      let canAfford = canAffordAnyMaterial(state, p)
+      let hasMats = hasEnoughMaterialsForCraft(p.inv)
+      if needsGear and not gearOnMarket and (canAfford or hasMats):
+        bot.wantedRole = "Crafter"
+      elif needsGear and gearOnMarket and not hasAffordableGearUpgradeCached(state, p, bot.lastSeenListings) and canAfford:
+        bot.wantedRole = "Crafter"
+      elif p.role == "Crafter" and not canAfford and not hasMats:
+        bot.wantedRole = "Gatherer"
+      else:
+        bot.wantedRole = "Gatherer"
 
     let shouldHoldForCraft = not p.hasFullGearSet(3) and not gearOnMarket
 

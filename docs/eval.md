@@ -1,8 +1,12 @@
 # Evaluation & Testing Guidelines
 
-## Core Principle
+## Core Principle (TV / Research Lens)
 
-If bots need 100k ticks to reach T3, the bots are broken — not the test. Extending tick counts masks bad behavior. A well-functioning economy with smart bots should reach full T3 gear in **under 10k ticks** with a balanced lineup.
+Marketboard's primary purpose is generating **exciting, narrative-rich matches** featuring heterogeneous personalities in adversarial social-dilemma conditions (hoarding, undercutting, role pivots, crises, wealth reversals, etc.) that can be played back on a TV with timed legend overlays.
+
+The classic "reach T3 fast" targets below remain useful as a *minimum competence floor*, but the real success metric for this project is drama density and personality clash in mixed populations.
+
+## Legacy Competence Targets (still useful baseline)
 
 ## What Was Wrong
 
@@ -13,6 +17,8 @@ Previous testing ran 50 matches × 100k ticks each. This:
 - Made iteration impossible (can't test a hypothesis if each run takes 10 minutes)
 
 ## Testing Rules
+
+Run the tools with `make eval-batch` / `make eval-diagnose` (uses `nim r`, no binaries) or `nim r tools/xxx.nim ...` directly.
 
 ### Quick Iteration (during development)
 ```

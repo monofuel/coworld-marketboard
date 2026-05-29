@@ -664,7 +664,15 @@ proc decide*(bot: var UtilityBot, state: GameState): uint8 =
         of akBuyMaterials: scoreBuyMaterials(state, bot)
         of akCraft: scoreCraft(state, bot)
         of akIdle: 0.01
-      if c.ticksActive >= 10 and newScore > currentScore * bot.weights.interruptThreshold:
+      var effectiveThreshold = bot.weights.interruptThreshold
+      # Sprint tuning: during emerging scarcity (low supply on current gather target),
+      # make high-batch_patience personalities stick longer. This creates bigger,
+      # more narrative droughts + cornering moments for TV legends reels.
+      if c.action.kind == akGather and c.action.targetNode.isSome:
+        let mat = c.action.targetNode.get().material
+        if supplyCount(state, mat) < 5:
+          effectiveThreshold *= 1.15
+      if c.ticksActive >= 10 and newScore > currentScore * effectiveThreshold:
         bot.commitment = none(Commitment)
 
   if bot.commitment.isNone:
