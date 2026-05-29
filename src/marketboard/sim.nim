@@ -1394,11 +1394,11 @@ proc renderSelection*(sim: var SimServer, playerIndex, cameraX, cameraY: int) =
     screenX = worldX - cameraX
     screenY = worldY - cameraY
   for px in 0 ..< MbTileSize:
-    sim.fb.putPixel(screenX + px, screenY, 10)
-    sim.fb.putPixel(screenX + px, screenY + MbTileSize - 1, 10)
+    sim.fb.putPixel(screenX + px, screenY, 3)
+    sim.fb.putPixel(screenX + px, screenY + MbTileSize - 1, 3)
   for py in 1 ..< MbTileSize - 1:
-    sim.fb.putPixel(screenX, screenY + py, 10)
-    sim.fb.putPixel(screenX + MbTileSize - 1, screenY + py, 10)
+    sim.fb.putPixel(screenX, screenY + py, 3)
+    sim.fb.putPixel(screenX + MbTileSize - 1, screenY + py, 3)
 
 proc renderActionProgress*(sim: var SimServer, playerIndex, cameraX, cameraY: int) =
   if playerIndex < 0 or playerIndex >= sim.players.len: return
@@ -1465,7 +1465,7 @@ proc drawProgressBar*(sim: var SimServer, progress, total, screenX, screenY: int
     sim.fb.putPixel(screenX + px, screenY, 1)
     sim.fb.putPixel(screenX + px, screenY + 1, 1)
   for px in 0 ..< filledWidth:
-    sim.fb.putPixel(screenX + px, screenY, 10)
+    sim.fb.putPixel(screenX + px, screenY, 11)
     sim.fb.putPixel(screenX + px, screenY + 1, 14)
 
 proc renderNumber*(

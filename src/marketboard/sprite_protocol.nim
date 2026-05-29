@@ -144,7 +144,9 @@ proc makeRgbaPlayer*(paletteColor: uint8): seq[uint8] =
     result[offset + 3] = rgba.a
 
 proc makeRgbaSelection*(size: int): seq[uint8] =
-  let rgba = Palette[10 and 0x0f]
+  ## Selection highlight uses a high-contrast accent (now 3, the bright red)
+  ## so it remains visible even on the calmer grass color 10.
+  let rgba = Palette[3 and 0x0f]
   result = newSeq[uint8](size * size * 4)
   for y in 0 ..< size:
     for x in 0 ..< size:
@@ -307,7 +309,7 @@ proc signalSpriteId*(icon: int): int =
 proc addCommonSprites*(packet: var seq[uint8]) =
   ## Registers the shared tile, object, player, selection, and signal sprites
   ## used by both the player-camera and global-spectator views.
-  packet.addSprite(TileGrassSpriteId, TileSize, TileSize, makeRgbaTile(11), "Grass")
+  packet.addSprite(TileGrassSpriteId, TileSize, TileSize, makeRgbaTile(10), "Grass")
   packet.addSprite(TilePathSpriteId, TileSize, TileSize, makeRgbaTile(5), "Path")
   packet.addSprite(TileWallSpriteId, TileSize, TileSize, makeRgbaTile(12), "Wall")
 
