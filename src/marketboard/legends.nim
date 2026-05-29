@@ -7,6 +7,8 @@ const
   MarketCapMilestones = [200, 300, 500, 750, 1000, 1500, 2000, 3000]
   MassRoleSwitchWindow = 48
   CorneringThreshold = 0.5
+  PriceEventCooldown = 192        # min ticks between price spikes/crashes per item
+  PriceEventMaxExcitement = 3.0   # keep price noise below curated highlights
 
 type
   LegendEventKind* = enum
@@ -32,6 +34,7 @@ type
 
   LegendTracker* = object
     events*: seq[LegendEvent]
+    started: bool
     prevLeaderIdx: int
     prevMarketCap: int
     peakMarketCap: int
@@ -39,6 +42,7 @@ type
     crashFloor: int
     priceHistory: array[ItemKind, seq[int]]
     droughtStart: array[ItemKind, int]
+    lastPriceEventTick: array[ItemKind, int]
     prevRoles: seq[Role]
     prevGolds: seq[int]
     milestonesReached: set[uint16]
@@ -50,6 +54,7 @@ proc initLegendTracker*(): LegendTracker =
   result.prevLeaderIdx = -1
   for item in ItemKind:
     result.droughtStart[item] = -1
+    result.lastPriceEventTick[item] = -PriceEventCooldown
 
 proc addEvent(tracker: var LegendTracker, tick: int, kind: LegendEventKind,
               desc: string, players: seq[int] = @[], value: int = 0,
@@ -59,19 +64,19 @@ proc addEvent(tracker: var LegendTracker, tick: int, kind: LegendEventKind,
     players: players, value: value, excitement: excitement
   )
 
-proc shortName(item: ItemKind): string =
+proc fullName(item: ItemKind): string =
   case item
   of WoodItem: "Wood"
-  of HardwoodItem: "Hdwd"
-  of IronwoodItem: "Irwd"
+  of HardwoodItem: "Hardwood"
+  of IronwoodItem: "Ironwood"
   of StoneItem: "Stone"
   of CopperItem: "Copper"
   of IronItem: "Iron"
   else: $item
 
 proc nick(name: string): string =
-  if name.len <= 8: name
-  else: name[0..6]
+  if name.len <= 14: name
+  else: name[0 ..< 14]
 
 proc cheapestListingPrice(sim: SimServer, item: ItemKind): int =
   result = int.high
@@ -128,7 +133,7 @@ proc detectLeadChange(tracker: var LegendTracker, sim: SimServer) =
 
   if tracker.prevLeaderIdx >= 0 and bestIdx != tracker.prevLeaderIdx:
     let prevScore = sim.rewardScore(tracker.prevLeaderIdx)
-    let desc = &"{nick(sim.players[bestIdx].name)} leads!"
+    let desc = &"{nick(sim.players[bestIdx].name)} takes the lead!"
     tracker.addEvent(sim.tickCount, LeadChange, desc,
       @[bestIdx, tracker.prevLeaderIdx], bestScore,
       float(bestScore - prevScore) + 5.0)
@@ -139,9 +144,11 @@ proc detectMarketCapMilestones(tracker: var LegendTracker, sim: SimServer) =
   for i, threshold in MarketCapMilestones:
     if cap >= threshold and uint16(i) notin tracker.milestonesReached:
       tracker.milestonesReached.incl uint16(i)
-      let desc = &"Cap hits {threshold}g!"
-      tracker.addEvent(sim.tickCount, MarketCapMilestone, desc,
-        value = threshold, excitement = float(threshold) / 100.0)
+      # Only announce milestones the market grows into, not ones it starts above.
+      if tracker.started:
+        let desc = &"Market cap hits {threshold}g!"
+        tracker.addEvent(sim.tickCount, MarketCapMilestone, desc,
+          value = threshold, excitement = float(threshold) / 100.0)
 
 proc detectPriceEvents(tracker: var LegendTracker, sim: SimServer) =
   for item in RawMaterials:
@@ -149,15 +156,17 @@ proc detectPriceEvents(tracker: var LegendTracker, sim: SimServer) =
     if price == int.high: continue
 
     let avg = rollingAvg(tracker.priceHistory[item])
-    if avg > 0:
+    if avg > 0 and sim.tickCount - tracker.lastPriceEventTick[item] >= PriceEventCooldown:
       if price >= avg * 2:
-        let desc = &"{shortName(item)} spike! {price}g"
-        tracker.addEvent(sim.tickCount, PriceSpike, desc,
-          value = price, excitement = float(price - avg))
+        let desc = &"{fullName(item)} spikes to {price}g!"
+        tracker.addEvent(sim.tickCount, PriceSpike, desc, value = price,
+          excitement = min(PriceEventMaxExcitement, float(price) / float(avg)))
+        tracker.lastPriceEventTick[item] = sim.tickCount
       elif price * 2 <= avg:
-        let desc = &"{shortName(item)} crash! {price}g"
-        tracker.addEvent(sim.tickCount, PriceCrash, desc,
-          value = price, excitement = float(avg - price))
+        let desc = &"{fullName(item)} crashes to {price}g!"
+        tracker.addEvent(sim.tickCount, PriceCrash, desc, value = price,
+          excitement = min(PriceEventMaxExcitement, float(avg) / float(price)))
+        tracker.lastPriceEventTick[item] = sim.tickCount
 
     tracker.priceHistory[item].add price
     if tracker.priceHistory[item].len > PriceWindowSize:
@@ -170,7 +179,7 @@ proc detectSupplyDroughts(tracker: var LegendTracker, sim: SimServer) =
       if tracker.droughtStart[item] < 0:
         tracker.droughtStart[item] = sim.tickCount
       elif sim.tickCount - tracker.droughtStart[item] == DroughtThresholdTicks:
-        let desc = &"{shortName(item)} drought!"
+        let desc = &"{fullName(item)} supply runs dry!"
         tracker.addEvent(sim.tickCount, SupplyDrought, desc,
           value = sim.tickCount - tracker.droughtStart[item],
           excitement = 3.0)
@@ -178,7 +187,7 @@ proc detectSupplyDroughts(tracker: var LegendTracker, sim: SimServer) =
       if tracker.droughtStart[item] >= 0 and
           sim.tickCount - tracker.droughtStart[item] >= DroughtThresholdTicks:
         let duration = sim.tickCount - tracker.droughtStart[item]
-        let desc = &"{shortName(item)} back!"
+        let desc = &"{fullName(item)} is back in stock!"
         tracker.addEvent(sim.tickCount, DroughtEnd, desc,
           value = duration, excitement = float(duration) / 24.0)
       tracker.droughtStart[item] = -1
@@ -190,7 +199,7 @@ proc detectFirstGearComplete(tracker: var LegendTracker, sim: SimServer) =
     if not tracker.gearCompleted[i]:
       if sim.players[i].equippedGearCount() >= GearSlotCount:
         tracker.gearCompleted[i] = true
-        let desc = &"{nick(sim.players[i].name)} full gear!"
+        let desc = &"{nick(sim.players[i].name)} completes a full gear set!"
         tracker.addEvent(sim.tickCount, FirstGearComplete, desc,
           @[i], excitement = 8.0)
 
@@ -213,8 +222,7 @@ proc detectRoleSwitches(tracker: var LegendTracker, sim: SimServer) =
   if tracker.recentRoleSwitches.len >= 2:
     let players = tracker.recentRoleSwitches.mapIt(it.player).deduplicate()
     if players.len >= 2:
-      let names = players.mapIt(nick(sim.players[it].name)).join(",")
-      let desc = &"Role rush! {names}"
+      let desc = &"Role rush! {players.len} agents switch roles!"
       tracker.addEvent(sim.tickCount, MassRoleSwitch, desc,
         players, excitement = float(players.len) * 5.0)
       tracker.recentRoleSwitches.setLen(0)
@@ -233,8 +241,7 @@ proc detectMarketCornering(tracker: var LegendTracker, sim: SimServer) =
             break
         if not alreadyReported:
           tracker.corneringReported.add (player: i, item: item)
-          let pct = (held * 100) div total
-          let desc = &"{nick(sim.players[i].name)} corners {shortName(item)}!"
+          let desc = &"{nick(sim.players[i].name)} corners the {fullName(item)} market!"
           tracker.addEvent(sim.tickCount, MarketCornering, desc,
             @[i], held, excitement = 10.0)
 
@@ -247,7 +254,7 @@ proc detectCrashRecovery(tracker: var LegendTracker, sim: SimServer) =
       float(tracker.peakMarketCap - cap) / float(tracker.peakMarketCap) > 0.2:
     tracker.inCrash = true
     tracker.crashFloor = cap
-    let desc = &"Market crash! -{((tracker.peakMarketCap - cap) * 100) div tracker.peakMarketCap}%"
+    let desc = &"The market crashes {((tracker.peakMarketCap - cap) * 100) div tracker.peakMarketCap}%!"
     tracker.addEvent(sim.tickCount, CrashRecovery, desc,
       value = cap, excitement = 15.0)
 
@@ -256,7 +263,7 @@ proc detectCrashRecovery(tracker: var LegendTracker, sim: SimServer) =
       tracker.crashFloor = cap
     if tracker.crashFloor > 0 and
         float(cap - tracker.crashFloor) / float(tracker.crashFloor) > 0.15:
-      let desc = &"Recovery! +{((cap - tracker.crashFloor) * 100) div tracker.crashFloor}%"
+      let desc = &"The market recovers {((cap - tracker.crashFloor) * 100) div tracker.crashFloor}%!"
       tracker.addEvent(sim.tickCount, CrashRecovery, desc,
         value = cap, excitement = 20.0)
       tracker.inCrash = false
@@ -294,7 +301,7 @@ proc detectWealthReversal(tracker: var LegendTracker, sim: SimServer) =
       curWorst = i
 
   if prevWorst == curBest and prevBest != curBest and prevBestScore > prevWorstScore:
-    let desc = &"{nick(sim.players[curBest].name)} last to 1st!"
+    let desc = &"{nick(sim.players[curBest].name)} storms from last to first!"
     tracker.addEvent(sim.tickCount, WealthReversal, desc,
       @[curBest], curBestScore, excitement = 25.0)
 
@@ -311,6 +318,9 @@ proc analyze*(tracker: var LegendTracker, sim: SimServer) =
   tracker.detectMarketCornering(sim)
   tracker.detectCrashRecovery(sim)
   tracker.detectWealthReversal(sim)
+  # After the first pass, the starting state is established; later milestone
+  # crossings are genuine growth and worth announcing.
+  tracker.started = true
 
 proc eventToJson(event: LegendEvent): JsonNode =
   result = newJObject()

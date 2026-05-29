@@ -631,14 +631,8 @@ proc testBotTierProgression() =
   var iwCrafterLevel = sim.players[indices[1]].crafterLevel
   for i, name in names:
     let role = sim.players[indices[i]].role
-    var bestGatherTier = 0
-    for s in 0 ..< GearSlotCount:
-      let t = gearTier(sim.players[indices[i]].gathererGear[s])
-      if t > bestGatherTier: bestGatherTier = t
-    var bestCraftTier = 0
-    for s in 0 ..< GearSlotCount:
-      let t = gearTier(sim.players[indices[i]].crafterGear[s])
-      if t > bestCraftTier: bestCraftTier = t
+    let bestGatherTier = fullGearSetTier(sim.players[indices[i]].gathererGear)
+    let bestCraftTier = fullGearSetTier(sim.players[indices[i]].crafterGear)
     let bt = max(bestGatherTier, bestCraftTier)
     if bt > maxTier: maxTier = bt
     let gearCount = sim.players[indices[i]].equippedGearCount()

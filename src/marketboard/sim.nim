@@ -335,12 +335,30 @@ proc tryUpgradeGear*(player: var Player, item: ItemKind): bool =
   player.setActiveGearSlot(slot, item)
   true
 
+proc fullGearSetTier*(gear: array[GearSlotCount, ItemKind]): int =
+  ## Returns the highest tier for which every gear slot is filled at that tier
+  ## or higher (0 = no complete set). Requires a full set, not just one piece.
+  for tier in countdown(3, 1):
+    var full = true
+    for i in 0 ..< GearSlotCount:
+      if not gear[i].isGearItem() or gearTier(gear[i]) < tier:
+        full = false
+        break
+    if full:
+      return tier
+  0
+
 proc hasFullGearSetOfTier*(player: Player, tier: int): bool =
   let gear = player.activeGear()
   for i in 0 ..< GearSlotCount:
     if not gear[i].isGearItem(): return false
     if gearTier(gear[i]) < tier: return false
   true
+
+proc gearLevel*(player: Player): int =
+  ## Returns the highest gear tier the active role has a complete set of, or 0
+  ## when no full set is equipped. Used as a readable "level" on the scoreboard.
+  player.activeGear().fullGearSetTier()
 
 proc canGatherMaterial*(player: Player, material: ItemKind): bool =
   let tier = materialTier(material)

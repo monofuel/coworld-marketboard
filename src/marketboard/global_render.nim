@@ -11,8 +11,17 @@ const
   MapPixelH* = WorldHeightTiles * TileSize
   ScoreboardWidth* = 150
   ScoreboardHeight* = 180
-  LegendWidth* = 240
-  LegendHeight* = 20
+  LegendWidth* = 290
+  LegendSlotCount* = 3
+  LegendRowHeight = BlockyCharHeight + 4
+  LegendHeight* = LegendSlotCount * LegendRowHeight + 4
+
+  DebugLayerId* = 3
+  DebugLayerType = 4              # bottom-left anchor
+  DebugWidth* = 90
+  DebugHeight* = BlockyCharHeight + 4
+  DebugTextSpriteId = 800
+  DebugObjectId = 9000
 
   ProgressSpriteBase = 200
   ScoreboardTextSpriteBase = 300
@@ -63,6 +72,9 @@ proc buildGlobalInitPacket*(sim: SimServer): seq[uint8] =
 
   packet.addLayer(LegendLayerId, LegendLayerType, UiFlag)
   packet.addViewport(LegendLayerId, LegendWidth, LegendHeight)
+
+  packet.addLayer(DebugLayerId, DebugLayerType, UiFlag)
+  packet.addViewport(DebugLayerId, DebugWidth, DebugHeight)
 
   packet.addCommonSprites()
 
@@ -147,13 +159,12 @@ proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState): seq[
     let displayName = if player.name.len > 12: player.name[0 ..< 12] else: player.name
     let roleTag = roleLabel(player.role)
     let line1 = if roleTag.len > 0: displayName & " " & roleTag else: displayName
-    let gearCount = player.equippedGearCount()
     let totalMats = player.inv.wood + player.inv.stone +
       player.inv.hardwood + player.inv.copper +
       player.inv.ironwood + player.inv.iron
-    var line2 = $player.gold & "g " & $gearCount & "/" & $GearSlotCount
+    var line2 = $player.gold & "g  lvl " & $player.gearLevel()
     if totalMats > 0:
-      line2.add " " & $totalMats & " mat"
+      line2.add "  " & $totalMats & " mat"
 
     let
       textX = 2 + TileSize + 2
@@ -177,22 +188,32 @@ proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState): seq[
       packet.addObject(ScoreboardRowObjectBase + rowSlot, textX + MbFont.glyphAdvance(' ') * 2, rowY2, 0, ScoreboardLayerId, spriteId)
     inc rowSlot
 
+  # Debug tick counter, bottom-left.
+  if sim.letterSprites.len > 0:
+    let tickText = $sim.tickCount
+    let tickPixels = renderBlockyTextToRgba(sim.letterSprites, sim.digitSprites, tickText, 2)
+    if tickPixels.len > 0:
+      packet.addSprite(DebugTextSpriteId, tickText.len * BlockyCharWidth + 2, BlockyCharHeight + 2, tickPixels)
+      packet.addObject(DebugObjectId, 2, 2, 0, DebugLayerId, DebugTextSpriteId)
+
   packet
 
-proc buildLegendPacket*(sim: SimServer, activeOverlay: string): seq[uint8] =
-  ## Builds a protocol packet for the legend overlay layer.
+proc buildLegendPacket*(sim: SimServer, slots: openArray[string]): seq[uint8] =
+  ## Builds the legend overlay layer: one left-aligned caption per slot at a
+  ## fixed row, so captions never reorder or shift horizontally. Empty slots
+  ## are removed so freed rows clear cleanly.
   var packet: seq[uint8]
-  if activeOverlay.len == 0 or sim.letterSprites.len == 0:
-    return packet
   let maxChars = (LegendWidth - 4) div BlockyCharWidth
-  let text = if activeOverlay.len > maxChars: activeOverlay[0 ..< maxChars] else: activeOverlay
-  let textPixels = renderBlockyTextToRgba(sim.letterSprites, sim.digitSprites, text, 14)
-  if textPixels.len == 0:
-    return packet
-  let textWidth = text.len * BlockyCharWidth + 2
-  let textHeight = BlockyCharHeight + 2
-  packet.addSprite(LegendTextSpriteId, textWidth, textHeight, textPixels)
-  let textX = (LegendWidth - textWidth) div 2
-  let textY = (LegendHeight - textHeight) div 2
-  packet.addObject(LegendObjectId, textX, textY, 0, LegendLayerId, LegendTextSpriteId)
+  for i in 0 ..< LegendSlotCount:
+    let raw = if i < slots.len: slots[i] else: ""
+    if raw.len == 0 or sim.letterSprites.len == 0:
+      packet.addRemoveObject(LegendObjectId + i)
+      continue
+    let text = if raw.len > maxChars: raw[0 ..< maxChars] else: raw
+    let textPixels = renderBlockyTextToRgba(sim.letterSprites, sim.digitSprites, text, 14)
+    if textPixels.len == 0:
+      packet.addRemoveObject(LegendObjectId + i)
+      continue
+    packet.addSprite(LegendTextSpriteId + i, text.len * BlockyCharWidth + 2, BlockyCharHeight + 2, textPixels)
+    packet.addObject(LegendObjectId + i, 2, i * LegendRowHeight, 0, LegendLayerId, LegendTextSpriteId + i)
   packet

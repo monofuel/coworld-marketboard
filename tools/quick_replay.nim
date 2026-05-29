@@ -5,7 +5,7 @@ const
   ViewerSource = "src" / "marketboard" / "replay_viewer.nim"
   FullmapSource = "src" / "marketboard" / "fullmap_viewer.nim"
   HeadlessSource = "tools" / "headless_sim.nim"
-  DefaultTicks = 10000
+  DefaultTicks = 4000
   DefaultReplayDir = "replays"
 
 when isMainModule:

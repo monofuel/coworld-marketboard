@@ -1,8 +1,12 @@
-import std/[json, monotimes, os, parseopt, strutils]
+import std/[algorithm, json, monotimes, os, parseopt, strutils]
 import pixie, windy
 import bitworld/protocol, marketboard/sim, marketboard/replays, marketboard/legends
 import marketboard/global_render
 import client/global_client
+
+const
+  LegendDisplayTicks = 96   # sim ticks a caption stays before its slot frees
+  MaxPendingLegends = 16
 
 type
   FullmapViewer = ref object
@@ -12,8 +16,8 @@ type
     loaded: bool
     viewerState: GlobalViewerState
     legendEvents: seq[LegendEvent]
-    activeOverlay: string
-    overlayTicksLeft: int
+    legendSlots: array[LegendSlotCount, tuple[text: string, ticksLeft: int]]
+    pendingLegends: seq[LegendEvent]
 
 proc bitworldClientDir(): string =
   getHomeDir() / ".nimby" / "pkgs" / "bitworld" / "client"
@@ -42,16 +46,52 @@ proc loadLegendsForReplay(viewer: FullmapViewer, replayPath: string) =
     except CatchableError:
       discard
 
+proc resetLegends(viewer: FullmapViewer) =
+  ## Clears all legend slots and the pending queue.
+  for slot in viewer.legendSlots.mitems:
+    slot = (text: "", ticksLeft: 0)
+  viewer.pendingLegends = @[]
+
 proc checkLegendEvents(viewer: FullmapViewer) =
-  ## Checks if the current tick matches a legend event and activates the overlay.
-  if viewer.overlayTicksLeft > 0:
-    dec viewer.overlayTicksLeft
+  ## Per sim tick: age slots, queue events firing this tick, and fill freed
+  ## slots with the most exciting pending events. Lifetime is counted in sim
+  ## ticks (deterministic, freezes on pause), and the same line never shows in
+  ## two slots at once.
+  for slot in viewer.legendSlots.mitems:
+    if slot.ticksLeft > 0:
+      dec slot.ticksLeft
+      if slot.ticksLeft == 0:
+        slot.text = ""
+
   let tick = viewer.sim.tickCount
   for event in viewer.legendEvents:
     if event.tick == tick:
-      viewer.activeOverlay = event.description
-      viewer.overlayTicksLeft = 72
-      break
+      viewer.pendingLegends.add event
+
+  # Keep the backlog bounded, retaining the highest-excitement events.
+  if viewer.pendingLegends.len > MaxPendingLegends:
+    viewer.pendingLegends.sort(proc(a, b: LegendEvent): int = cmp(b.excitement, a.excitement))
+    viewer.pendingLegends.setLen(MaxPendingLegends)
+
+  for slot in viewer.legendSlots.mitems:
+    if slot.ticksLeft > 0 or viewer.pendingLegends.len == 0:
+      continue
+    var bestIdx = -1
+    for i in 0 ..< viewer.pendingLegends.len:
+      var alreadyShown = false
+      for other in viewer.legendSlots:
+        if other.ticksLeft > 0 and other.text == viewer.pendingLegends[i].description:
+          alreadyShown = true
+          break
+      if alreadyShown:
+        continue
+      if bestIdx < 0 or viewer.pendingLegends[i].excitement > viewer.pendingLegends[bestIdx].excitement:
+        bestIdx = i
+    if bestIdx < 0:
+      continue
+    slot.text = viewer.pendingLegends[bestIdx].description
+    slot.ticksLeft = LegendDisplayTicks
+    viewer.pendingLegends.delete(bestIdx)
 
 proc initFullmapViewer*(): FullmapViewer =
   result = FullmapViewer()
@@ -77,8 +117,7 @@ proc loadReplay*(viewer: FullmapViewer, path: string) =
   viewer.replay = initMbReplayPlayer(data)
   viewer.loaded = true
   viewer.viewerState = GlobalViewerState()
-  viewer.activeOverlay = ""
-  viewer.overlayTicksLeft = 0
+  viewer.resetLegends()
   viewer.app.resetProtocolState()
   viewer.app.setStatus("")
   viewer.loadLegendsForReplay(path)
@@ -100,8 +139,10 @@ proc tick*(viewer: FullmapViewer) =
     if packet.len > 0:
       viewer.app.parseMessage(blobFromBytes(packet))
 
-    let overlayText = if viewer.overlayTicksLeft > 0: viewer.activeOverlay else: ""
-    let legendPacket = buildLegendPacket(viewer.sim, overlayText)
+    var slotTexts: array[LegendSlotCount, string]
+    for i in 0 ..< LegendSlotCount:
+      slotTexts[i] = viewer.legendSlots[i].text
+    let legendPacket = buildLegendPacket(viewer.sim, slotTexts)
     if legendPacket.len > 0:
       viewer.app.parseMessage(blobFromBytes(legendPacket))
 
@@ -120,8 +161,7 @@ proc installFileDrop*(viewer: FullmapViewer) =
       viewer.replay = initMbReplayPlayer(data)
       viewer.loaded = true
       viewer.viewerState = GlobalViewerState()
-      viewer.activeOverlay = ""
-      viewer.overlayTicksLeft = 0
+      viewer.resetLegends()
       viewer.app.resetProtocolState()
       viewer.app.setStatus("")
       viewer.loadLegendsForReplay(fileName)
