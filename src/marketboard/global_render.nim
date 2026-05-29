@@ -26,6 +26,15 @@ const
   DebugTextSpriteId = 800
   DebugObjectId = 9000
 
+  # Demo mode (global spectator only) — new anchored panel + map spotlight
+  # for the currently "featured" agent derived from high-excitement legends.
+  DemoPanelLayerId* = 4
+  DemoPanelLayerType = 2            # top-right (see global_client.nim layer positioning for kind=2)
+  DemoPanelWidth* = 120             # extra room for cargo breakdown + 5-slot gear shorthand while staying compact on screen
+  DemoPanelHeight* = 220            # plenty of vertical headroom for detailed inventory + gear lines
+  DemoSpotlightSpriteId = 850
+  DemoPanelTextBase = 900
+
   ProgressSpriteBase = 200
   ScoreboardTextSpriteBase = 300
   PlayerIdentitySpriteBase = 600
@@ -41,6 +50,7 @@ const
   ScoreboardRowObjectBase = 6000
   SwatchObjectBase = 8000
   LegendObjectId = 7000
+  DemoPanelObjectBase = 9500   # for demo panel content objects
 
   ProgressBarWidth = 16
   ProgressBarHeight = 3
@@ -64,7 +74,126 @@ proc playerColorIndex(idx: int): int =
   ## Returns the identity-color slot for a player, by their seat index.
   idx mod PlayerColors.len
 
-proc buildGlobalInitPacket*(sim: SimServer, showDebug: bool = true): seq[uint8] =
+proc addDemoFeaturedPanel(packet: var seq[uint8], sim: SimServer, featured: int) =
+  ## Renders the featured agent details panel (top-right UI layer) using the exact same
+  ## renderTextToRgba + MbFont + swatch pattern as the left scoreboard so text is always visible.
+  ## Shows inventory, gold, and equipment with one spelled-out line per slot.
+  if featured < 0 or featured >= sim.players.len:
+    return
+
+  var lastFeatured {.global.} = -2
+  if featured != lastFeatured:
+    echo "[demo panel] building for featured=", featured
+    lastFeatured = featured
+
+  # Remove prior frame objects in our range. Dynamic sprites are re-added each frame.
+  for i in 0 ..< 25:
+    packet.addRemoveObject(DemoPanelObjectBase + 200 + i)
+
+  let p = sim.players[featured]
+
+  # Line 1: name + role (with swatch, exactly like a scoreboard row).
+  let displayName = if p.name.len > 12: p.name[0 ..< 12] else: p.name
+  let roleTag = roleLabel(p.role)
+  let nameLine = if roleTag.len > 0: displayName & " " & roleTag else: displayName
+
+  # Gold on its own line so the amount is instantly readable.
+  let goldLine = $p.gold & "g"
+
+  # Inventory: only non-zero raw materials, short 1-2 char codes. Vertical space is abundant.
+  let w = p.inv.wood
+  let st = p.inv.stone
+  let h = p.inv.hardwood
+  let c = p.inv.copper
+  let iw = p.inv.ironwood
+  let i = p.inv.iron
+  var cargoLine = ""
+  if w > 0: cargoLine.add "w" & $w & " "
+  if st > 0: cargoLine.add "s" & $st & " "
+  if h > 0: cargoLine.add "h" & $h & " "
+  if c > 0: cargoLine.add "c" & $c & " "
+  if iw > 0: cargoLine.add "iw" & $iw & " "
+  if i > 0: cargoLine.add "i" & $i & " "
+  if cargoLine.len > 0:
+    cargoLine.setLen(cargoLine.len - 1)  # trim trailing space
+  else:
+    cargoLine = "no mats"
+
+  # Equipment for the active role, one full line per slot as requested.
+  let gear = p.activeGear()
+  let hatLine    = "Hat: lvl "   & $gearTier(gear[0])
+  let shirtLine  = "Shirt: lvl " & $gearTier(gear[1])
+  let glovesLine = "Gloves: lvl " & $gearTier(gear[2])
+  let pantsLine  = "Pants: lvl " & $gearTier(gear[3])
+  let shoesLine  = "Shoes: lvl " & $gearTier(gear[4])
+
+  # Swatch + name, gold, cargo, then five equipment lines. No background rect.
+  let textX = 2 + TileSize + 2
+  var rowY = 2
+
+  packet.addObject(DemoPanelObjectBase + 201, 2, rowY, 1, DemoPanelLayerId, SwatchSpriteBase + playerColorIndex(featured))
+
+  let lineColor = 8'u8  # yellow for featured consistency
+  let namePixels = renderTextToRgba(nameLine, lineColor)
+  if namePixels.len > 0:
+    let sid = DemoPanelTextBase + 0
+    packet.addSprite(sid, MbFont.textWidth(nameLine), MbFont.height, namePixels)
+    packet.addObject(DemoPanelObjectBase + 210, textX, rowY, 2, DemoPanelLayerId, sid)
+  rowY += MbFont.height + 1
+
+  # Gold line, slightly brighter for money feel.
+  let goldPixels = renderTextToRgba(goldLine, 11'u8)
+  if goldPixels.len > 0:
+    let sid = DemoPanelTextBase + 1
+    packet.addSprite(sid, MbFont.textWidth(goldLine), MbFont.height, goldPixels)
+    packet.addObject(DemoPanelObjectBase + 211, textX, rowY, 2, DemoPanelLayerId, sid)
+  rowY += MbFont.height + 1
+
+  let cargoPixels = renderTextToRgba(cargoLine, 2'u8)
+  if cargoPixels.len > 0:
+    let sid = DemoPanelTextBase + 2
+    packet.addSprite(sid, MbFont.textWidth(cargoLine), MbFont.height, cargoPixels)
+    packet.addObject(DemoPanelObjectBase + 212, textX, rowY, 2, DemoPanelLayerId, sid)
+  rowY += MbFont.height + 1
+
+  # Five separate equipment lines (one per slot) using full names.
+  let hatPixels = renderTextToRgba(hatLine, 2'u8)
+  if hatPixels.len > 0:
+    let sid = DemoPanelTextBase + 4
+    packet.addSprite(sid, MbFont.textWidth(hatLine), MbFont.height, hatPixels)
+    packet.addObject(DemoPanelObjectBase + 214, textX, rowY, 2, DemoPanelLayerId, sid)
+  rowY += MbFont.height + 1
+
+  let shirtPixels = renderTextToRgba(shirtLine, 2'u8)
+  if shirtPixels.len > 0:
+    let sid = DemoPanelTextBase + 5
+    packet.addSprite(sid, MbFont.textWidth(shirtLine), MbFont.height, shirtPixels)
+    packet.addObject(DemoPanelObjectBase + 215, textX, rowY, 2, DemoPanelLayerId, sid)
+  rowY += MbFont.height + 1
+
+  let glovesPixels = renderTextToRgba(glovesLine, 2'u8)
+  if glovesPixels.len > 0:
+    let sid = DemoPanelTextBase + 6
+    packet.addSprite(sid, MbFont.textWidth(glovesLine), MbFont.height, glovesPixels)
+    packet.addObject(DemoPanelObjectBase + 216, textX, rowY, 2, DemoPanelLayerId, sid)
+  rowY += MbFont.height + 1
+
+  let pantsPixels = renderTextToRgba(pantsLine, 2'u8)
+  if pantsPixels.len > 0:
+    let sid = DemoPanelTextBase + 7
+    packet.addSprite(sid, MbFont.textWidth(pantsLine), MbFont.height, pantsPixels)
+    packet.addObject(DemoPanelObjectBase + 217, textX, rowY, 2, DemoPanelLayerId, sid)
+  rowY += MbFont.height + 1
+
+  let shoesPixels = renderTextToRgba(shoesLine, 2'u8)
+  if shoesPixels.len > 0:
+    let sid = DemoPanelTextBase + 8
+    packet.addSprite(sid, MbFont.textWidth(shoesLine), MbFont.height, shoesPixels)
+    packet.addObject(DemoPanelObjectBase + 218, textX, rowY, 2, DemoPanelLayerId, sid)
+
+  # Only log on actual featured change (the guarded message above). No per-frame spam.
+
+proc buildGlobalInitPacket*(sim: SimServer, showDebug: bool = true, demoFeatured: int = -1): seq[uint8] =
   var packet: seq[uint8]
 
   packet.addLayer(MapLayerId, MapLayerKind, ZoomableFlag)
@@ -79,6 +208,11 @@ proc buildGlobalInitPacket*(sim: SimServer, showDebug: bool = true): seq[uint8] 
   if showDebug:
     packet.addLayer(DebugLayerId, DebugLayerType, UiFlag)
     packet.addViewport(DebugLayerId, DebugWidth, DebugHeight)
+
+  # Demo featured panel layer (populated when demoFeatured >= 0).
+  # Compact top-right (kind=2) so it fits nicely without spilling into the center.
+  packet.addLayer(DemoPanelLayerId, DemoPanelLayerType, UiFlag)
+  packet.addViewport(DemoPanelLayerId, DemoPanelWidth, DemoPanelHeight)
 
   packet.addCommonSprites()
 
@@ -105,11 +239,11 @@ proc buildGlobalInitPacket*(sim: SimServer, showDebug: bool = true): seq[uint8] 
 
   packet
 
-proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState, showDebug: bool = true): seq[uint8] =
+proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState, showDebug: bool = true, demoFeatured: int = -1): seq[uint8] =
   var packet: seq[uint8]
 
   if not state.initialized:
-    packet = buildGlobalInitPacket(sim, showDebug)
+    packet = buildGlobalInitPacket(sim, showDebug, demoFeatured)
     state.initialized = true
 
   # Update world objects (depletion changes)
@@ -131,6 +265,11 @@ proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState, showD
     let player = sim.players[idx]
     let z = 2 + player.y
     packet.addObject(PlayerObjectBase + idx, player.x, player.y, z, MapLayerId, PlayerIdentitySpriteBase + playerColorIndex(idx))
+
+    # Demo mode spotlight (only for the currently featured agent from legends)
+    if demoFeatured == idx:
+      # Center the 9x9 ring on the 7x7 player sprite
+      packet.addObject(9990 + idx, player.x - 1, player.y - 1, z + 3, MapLayerId, 850)
 
     # Signal icon above player, removed when the player stops signaling.
     if player.signalIcon >= 0:
@@ -177,14 +316,15 @@ proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState, showD
     # Identity swatch aligned with the name line.
     packet.addObject(SwatchObjectBase + i, 2, rowY1, 0, ScoreboardLayerId, SwatchSpriteBase + playerColorIndex(i))
 
-    let line1Pixels = renderTextToRgba(line1, 2)
+    let line1Color = if demoFeatured == i: 8'u8 else: 2'u8  # brighter yellow when featured
+    let line1Pixels = renderTextToRgba(line1, line1Color)
     if line1Pixels.len > 0:
       let spriteId = ScoreboardTextSpriteBase + rowSlot
       packet.addSprite(spriteId, MbFont.textWidth(line1), MbFont.height, line1Pixels)
       packet.addObject(ScoreboardRowObjectBase + rowSlot, textX, rowY1, 0, ScoreboardLayerId, spriteId)
     inc rowSlot
 
-    let line2Pixels = renderTextToRgba(line2, 2)
+    let line2Pixels = renderTextToRgba(line2, line1Color)
     if line2Pixels.len > 0:
       let spriteId = ScoreboardTextSpriteBase + rowSlot
       packet.addSprite(spriteId, MbFont.textWidth(line2), MbFont.height, line2Pixels)
@@ -199,6 +339,10 @@ proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState, showD
     if tickPixels.len > 0:
       packet.addSprite(DebugTextSpriteId, tickText.len * BlockyCharWidth + 2, BlockyCharHeight + 2, tickPixels)
       packet.addObject(DebugObjectId, 2, 2, 0, DebugLayerId, DebugTextSpriteId)
+
+  # Right-side demo panel (following metrics)
+  if demoFeatured >= 0:
+    addDemoFeaturedPanel(packet, sim, demoFeatured)
 
   packet
 
@@ -221,3 +365,5 @@ proc buildLegendPacket*(sim: SimServer, slots: openArray[string]): seq[uint8] =
     packet.addSprite(LegendTextSpriteId + i, text.len * BlockyCharWidth + 2, BlockyCharHeight + 2, textPixels)
     packet.addObject(LegendObjectId + i, 2, i * LegendRowHeight, 0, LegendLayerId, LegendTextSpriteId + i)
   packet
+
+
