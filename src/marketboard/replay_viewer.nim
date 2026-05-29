@@ -1,6 +1,7 @@
 import std/[json, monotimes, os, parseopt, strutils, times]
 import pixie, silky, windy
 import bitworld/protocol, bitworld/server, marketboard/sim, marketboard/replays, marketboard/legends
+import marketboard/constants
 
 const
   PixelScale = 4
@@ -22,6 +23,12 @@ type
     legendsEnabled: bool
     activeOverlay: string
     overlayTicksLeft: int
+    speedMultiplier: float = 1.0
+    showTick: bool = false
+
+    # Time-based simulation advancement (decouples sim tick rate from render FPS)
+    lastSimAdvance: MonoTime
+    simAccumulator: float
 
 proc unpack4bpp(packed: openArray[uint8], unpacked: var seq[uint8]) =
   let targetLen = packed.len * 2
@@ -87,6 +94,11 @@ proc loadReplay(viewer: ReplayViewerApp, path: string) =
     viewer.loaded = true
     viewer.statusText = ""
     viewer.loadLegendsForReplay(path)
+
+    # Reset time-based simulation clock
+    viewer.lastSimAdvance = MonoTime()
+    viewer.simAccumulator = 0.0
+
     echo "Loaded replay: ", path
   except CatchableError as e:
     viewer.loaded = false
@@ -144,7 +156,8 @@ proc checkLegendEvents(viewer: ReplayViewerApp) =
   for event in viewer.legendEvents:
     if event.tick == tick:
       viewer.activeOverlay = event.description
-      viewer.overlayTicksLeft = 72
+      # Scale by speed multiplier so legends last consistent wall time
+      viewer.overlayTicksLeft = int(constants.BaseLegendDisplayTicks * viewer.speedMultiplier)
       break
 
 proc renderFrame(viewer: ReplayViewerApp) =
@@ -230,10 +243,28 @@ proc stepReplay(viewer: ReplayViewerApp) =
   if not viewer.loaded or not viewer.replay.playing:
     return
   try:
-    for _ in 0 ..< viewer.replay.replaySpeed():
+    # Time-based advancement: advance simulation at (GameTPS * current speed) TPS
+    # regardless of how fast the GUI is rendering. This fixes the previous
+    # "tick rate locked to FPS + multiplier" problem.
+    let now = getMonoTime()
+    if viewer.lastSimAdvance == MonoTime():
+      viewer.lastSimAdvance = now
+
+    let deltaSeconds = (now - viewer.lastSimAdvance).inNanoseconds.float / 1_000_000_000.0
+    viewer.lastSimAdvance = now
+
+    let multiplier = viewer.speedMultiplier  # set via CLI or keyboard
+    let ticksToAdvance = deltaSeconds * constants.GameTPS.float * multiplier
+
+    viewer.simAccumulator += ticksToAdvance
+    let steps = viewer.simAccumulator.int
+    viewer.simAccumulator -= steps.float
+
+    for _ in 0 ..< steps:
       if viewer.replay.playing:
         viewer.replay.stepReplay(viewer.sim)
         viewer.checkLegendEvents()
+
     if viewer.replay.looping and not viewer.replay.playing:
       viewer.replay.seekReplay(viewer.sim, 0)
       viewer.replay.playing = true
@@ -246,24 +277,39 @@ proc tick(viewer: ReplayViewerApp) =
   viewer.stepReplay()
   viewer.renderFrame()
 
-proc parseReplayPathArg(): string =
+proc parseReplayArgs(): tuple[path: string, speed: float, showTick: bool] =
+  var path = ""
+  var speed = 1.0
+  var showTick = false
   for kind, key, value in getopt():
     case kind
     of cmdLongOption:
       if key == "load":
-        return value
+        path = value
+      elif key == "speed" or key == "multiplier":
+        if value.len > 0:
+          try:
+            speed = parseFloat(value)
+            if speed <= 0: speed = 1.0
+          except:
+            discard
+      elif key == "tick" or key == "show-tick":
+        showTick = true
     of cmdArgument:
-      return key
+      path = key
     else:
       discard
+  (path, speed, showTick)
 
 proc runReplayViewer() =
   let viewer = initViewer()
   viewer.handleKeyboard()
 
-  let replayPath = parseReplayPathArg()
+  let (replayPath, speed, showTick) = parseReplayArgs()
   if replayPath.len > 0:
     viewer.loadReplay(replayPath)
+    viewer.speedMultiplier = speed
+    viewer.showTick = showTick
 
   viewer.window.onFileDrop = proc(fileName, fileData: string) =
     try:
@@ -275,6 +321,11 @@ proc runReplayViewer() =
       viewer.loaded = true
       viewer.statusText = ""
       viewer.loadLegendsForReplay(fileName)
+
+      # Reset time-based simulation clock
+      viewer.lastSimAdvance = MonoTime()
+      viewer.simAccumulator = 0.0
+
       echo "Loaded replay: ", fileName
     except CatchableError as e:
       viewer.loaded = false
@@ -282,7 +333,11 @@ proc runReplayViewer() =
       echo "Could not load replay ", fileName, ": ", e.msg
 
   var lastTick = getMonoTime()
-  let frameDuration = initDuration(microseconds = 1_000_000 div MbReplayFps)
+  # Render at a pleasant fixed rate (e.g. 60 FPS) for smooth UI.
+  # Simulation advancement is now handled with a time accumulator in stepReplay()
+  # so it stays locked to GameTPS * multiplier regardless of render rate.
+  let renderFps = 60
+  let frameDuration = initDuration(microseconds = 1_000_000 div renderFps)
 
   while not viewer.window.closeRequested:
     pollEvents()

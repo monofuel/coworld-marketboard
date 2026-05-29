@@ -1,11 +1,13 @@
-import std/[algorithm, json, monotimes, os, parseopt, strutils]
+import std/[algorithm, json, monotimes, os, parseopt, strutils, times]
 import pixie, windy
 import bitworld/protocol, marketboard/sim, marketboard/replays, marketboard/legends
 import marketboard/global_render
 import client/global_client
 
+import marketboard/constants
+
 const
-  LegendDisplayTicks = 96   # sim ticks a caption stays before its slot frees
+  LegendDisplayTicks = constants.BaseLegendDisplayTicks
   MaxPendingLegends = 16
 
 type
@@ -18,6 +20,12 @@ type
     legendEvents: seq[LegendEvent]
     legendSlots: array[LegendSlotCount, tuple[text: string, ticksLeft: int]]
     pendingLegends: seq[LegendEvent]
+    speedMultiplier: float   # 1.0 = normal game speed (24 TPS). Scales stepping and legend lifetime.
+    showTick*: bool          # Whether to show the debug tick counter (disabled by default)
+
+    # Time-based simulation advancement (decouples sim tick rate from render FPS)
+    lastSimAdvance: MonoTime
+    simAccumulator: float
 
 proc bitworldClientDir(): string =
   getHomeDir() / ".nimby" / "pkgs" / "bitworld" / "client"
@@ -90,7 +98,8 @@ proc checkLegendEvents(viewer: FullmapViewer) =
     if bestIdx < 0:
       continue
     slot.text = viewer.pendingLegends[bestIdx].description
-    slot.ticksLeft = LegendDisplayTicks
+    # Scale legend lifetime by speed so wall-time duration stays roughly constant
+    slot.ticksLeft = int(LegendDisplayTicks * viewer.speedMultiplier)
     viewer.pendingLegends.delete(bestIdx)
 
 proc initFullmapViewer*(): FullmapViewer =
@@ -100,6 +109,8 @@ proc initFullmapViewer*(): FullmapViewer =
   # Do NOT create app here — live path will create the correct spectator one.
   # Replay path will create its own in loadReplay.
   result.app = nil
+  result.showTick = false
+  result.speedMultiplier = 1.0
   # replay remains uninitialized (nil) for live path
 
 proc loadReplay*(viewer: FullmapViewer, path: string) =
@@ -117,6 +128,10 @@ proc loadReplay*(viewer: FullmapViewer, path: string) =
   viewer.app.setStatus("")
   viewer.loadLegendsForReplay(path)
 
+  # Reset time-based sim clock
+  viewer.lastSimAdvance = MonoTime()
+  viewer.simAccumulator = 0.0
+
 proc tick*(viewer: FullmapViewer) =
   viewer.app.handleInput()
 
@@ -126,10 +141,23 @@ proc tick*(viewer: FullmapViewer) =
     # replay is a value object (MbReplayPlayer), not a ref, so we detect "real replay loaded"
     # by the presence of actual replay data (populated only by loadReplay / file drop).
     if viewer.replay.data.gameName.len > 0 and viewer.replay.playing:
-      for _ in 0 ..< viewer.replay.replaySpeed():
+      # Time-based stepping at GameTPS * speedMultiplier (decoupled from render rate)
+      let now = getMonoTime()
+      if viewer.lastSimAdvance == MonoTime():
+        viewer.lastSimAdvance = now
+      let delta = (now - viewer.lastSimAdvance).inNanoseconds.float / 1_000_000_000.0
+      viewer.lastSimAdvance = now
+
+      let ticksToAdvance = delta * constants.GameTPS.float * viewer.speedMultiplier
+      viewer.simAccumulator += ticksToAdvance
+      let steps = viewer.simAccumulator.int
+      viewer.simAccumulator -= steps.float
+
+      for _ in 0 ..< steps:
         if viewer.replay.playing:
           viewer.replay.stepReplay(viewer.sim)
           viewer.checkLegendEvents()
+
       if viewer.replay.looping and not viewer.replay.playing:
         viewer.replay.seekReplay(viewer.sim, 0)
         viewer.replay.playing = true
@@ -141,6 +169,14 @@ proc tick*(viewer: FullmapViewer) =
     let legendPacket = buildLegendPacket(viewer.sim, slotTexts)
     if legendPacket.len > 0:
       viewer.app.parseMessage(blobFromBytes(legendPacket))
+
+    # In pure replay mode we are responsible for driving the entire global
+    # protocol state (map, scoreboard, players, tick counter, etc.) locally
+    # by injecting what the server would have sent.
+    if viewer.replay.data.gameName.len > 0:
+      let framePacket = buildGlobalFramePacket(viewer.sim, viewer.viewerState, viewer.showTick)
+      if framePacket.len > 0:
+        viewer.app.parseMessage(blobFromBytes(framePacket))
 
   viewer.app.maybeFit()
   viewer.app.draw()
@@ -161,11 +197,17 @@ proc installFileDrop*(viewer: FullmapViewer) =
       viewer.app.resetProtocolState()
       viewer.app.setStatus("")
       viewer.loadLegendsForReplay(fileName)
+
+      # Reset time-based sim clock
+      viewer.lastSimAdvance = MonoTime()
+      viewer.simAccumulator = 0.0
   )
 
-proc parseArgs(): tuple[address: string, replayPath: string] =
+proc parseArgs(): tuple[address: string, replayPath: string, speed: float, showTick: bool] =
   result.address = "ws://localhost:8080/global"
   result.replayPath = ""
+  result.speed = 1.0
+  result.showTick = false
 
   for kind, key, value in getopt():
     case kind
@@ -175,10 +217,22 @@ proc parseArgs(): tuple[address: string, replayPath: string] =
           result.address = value
           if not value.startsWith("ws://"):
             result.address = "ws://" & value
+      elif key == "speed" or key == "multiplier":
+        if value.len > 0:
+          try:
+            result.speed = parseFloat(value)
+            if result.speed <= 0: result.speed = 1.0
+          except:
+            discard
+      elif key == "tick" or key == "show-tick" or key == "debug-tick":
+        result.showTick = true
       elif key == "help" or key == "h":
-        echo "Usage: fullmap_viewer [--address:ws://localhost:8080/global] [replay.mbreplay]"
-        echo "  --address  Connect to live server global view (default)"
-        echo "             Pure spectator mode (no player input, clean for lobby TV)"
+        echo "Usage: fullmap_viewer [--address:ws://localhost:8080/global] [replay.mbreplay] [--speed:2.0]"
+        echo "  --address     Connect to live server global view (default)"
+        echo "                Pure spectator mode (no player input, clean for lobby TV)"
+        echo "  --speed:N     Replay speed multiplier (default 1.0). Affects sim rate and legend lifetime."
+        echo "  --multiplier:N  Alias for --speed"
+        echo "  --tick        Show the tick counter (disabled by default)"
         quit(0)
     of cmdArgument:
       if key.startsWith("ws://") or key.startsWith("wss://"):
@@ -187,16 +241,47 @@ proc parseArgs(): tuple[address: string, replayPath: string] =
         result.replayPath = key
     else: discard
 
+  # If a replay file was provided positionally, clear the default ws address
+  # so we correctly take the replay branch instead of trying (and failing) to connect.
+  if result.replayPath.len > 0:
+    result.address = ""
+
 when isMainModule:
-  let args = parseArgs()
+  let (address, replayPath, speed, showTick) = parseArgs()
 
   # Live path must create app FIRST (before installFileDrop and tick loop)
   var viewer: FullmapViewer
-  if args.address.len > 0 and args.address.startsWith("ws://"):
-    # Pure global spectator for lobby TV - let the real WebSocket handle packets
-    # (remove packetSink so global_client opens the connection and calls parseMessage)
+  if replayPath.len > 0:
+    # Pure replay / offline mode: create a non-connected GlobalApp so we can
+    # locally drive the entire global protocol (map + scoreboard + players + tick + legends)
+    # from the stepped local sim. This makes "quick_replay" (record + view) actually work.
     let app = initGlobalApp(
-      address = args.address,
+      address = "",
+      options = GlobalOptions(
+        title: "Marketboard Replay Fullmap",
+        atlasPath: clientDistDir() / "atlas.png",
+        palettePath: clientDataDir() / "pallete.png",
+        playerMode: false,
+        packetSink: proc(packet: string) = discard   # offline only — we feed packets via parseMessage
+      )
+    )
+    app.setStatus("")
+    viewer = FullmapViewer(
+      app: app,
+      sim: initSimServer(0),
+      loaded: false,
+      viewerState: GlobalViewerState(),
+      speedMultiplier: speed,
+      showTick: showTick
+    )
+    loadRenderAssets(viewer.sim)
+    viewer.installFileDrop()
+    if replayPath.len > 0:
+      viewer.loadReplay(replayPath)
+  elif address.len > 0 and address.startsWith("ws://"):
+    # Live / connected spectator mode
+    let app = initGlobalApp(
+      address = address,
       options = GlobalOptions(
         title: "Marketboard Live Fullmap",
         atlasPath: clientDistDir() / "atlas.png",
@@ -209,15 +294,17 @@ when isMainModule:
       app: app,
       sim: initSimServer(0),  # kept for local legend/events but not used for rendering
       loaded: true,
-      viewerState: GlobalViewerState()
+      viewerState: GlobalViewerState(),
+      speedMultiplier: 1.0,
+      showTick: true  # always show in live for now
     )
     loadRenderAssets(viewer.sim)
     viewer.installFileDrop()
   else:
     viewer = initFullmapViewer()
     viewer.installFileDrop()
-    if args.replayPath.len > 0:
-      viewer.loadReplay(args.replayPath)
+    if replayPath.len > 0:
+      viewer.loadReplay(replayPath)
 
   var lastTick = getMonoTime()
   while viewer.windowOpen():

@@ -1,12 +1,13 @@
 import std/times
 import bitworld/protocol, marketboard/sim
+import marketboard/constants
 
 const
   MbGameName* = "marketboard"
   MbGameVersion* = "1"
   MbReplayMagic* = "BITWORLD"
   MbReplayFormatVersion* = 2'u16
-  MbReplayFps* = 24
+  MbReplayFps* = constants.MbReplayFps
   MbReplayTickHashRecord* = 0x01'u8
   MbReplayInputRecord* = 0x02'u8
   MbReplayJoinRecord* = 0x03'u8
@@ -53,8 +54,9 @@ type
     looping*: bool
     speedIndex*: int
 
+# PlaybackSpeeds is now defined in constants.nim and re-exported below for convenience.
 const
-  PlaybackSpeeds* = [1, 2, 3, 4, 8]
+  PlaybackSpeeds* = constants.PlaybackSpeeds
 
 proc tickTime*(tick: int): uint32 =
   uint32((int64(tick) * 1000'i64) div int64(MbReplayFps))
@@ -223,7 +225,7 @@ proc initMbReplayPlayer*(data: MbReplayData): MbReplayPlayer =
   result.prevMasks = @[]
   result.playing = true
   result.looping = false
-  result.speedIndex = 0
+  result.speedIndex = 0   # corresponds to DefaultReplayMultiplier (1x)
 
 proc replaySpeed*(replay: MbReplayPlayer): int =
   PlaybackSpeeds[clamp(replay.speedIndex, 0, PlaybackSpeeds.high)]

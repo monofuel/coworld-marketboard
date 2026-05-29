@@ -7,8 +7,10 @@ import marketboard/global_render
 import marketboard/sprite_protocol
 import std/[json, locks, monotimes, os, parseopt, strutils, tables, times]
 
+import marketboard/constants
+
 const
-  TargetFps = 24
+  TargetFps = constants.GameTPS
   WebSocketPath = "/player"
 
 type

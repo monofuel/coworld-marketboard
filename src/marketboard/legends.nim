@@ -1,13 +1,14 @@
 import std/[algorithm, json, math, sequtils, strformat, strutils]
 import marketboard/sim
+import marketboard/constants
 
 const
-  DroughtThresholdTicks* = 48
+  DroughtThresholdTicks* = constants.DroughtThresholdTicks
   PriceWindowSize = 10
   MarketCapMilestones = [200, 300, 500, 750, 1000, 1500, 2000, 3000]
-  MassRoleSwitchWindow = 48
+  MassRoleSwitchWindow = constants.MassRoleSwitchWindow
   CorneringThreshold = 0.5
-  PriceEventCooldown = 192        # min ticks between price spikes/crashes per item
+  PriceEventCooldown = constants.PriceEventCooldown
   PriceEventMaxExcitement = 3.0   # keep price noise below curated highlights
 
 type

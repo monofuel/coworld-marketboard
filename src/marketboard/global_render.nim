@@ -10,7 +10,10 @@ const
   MapPixelW* = WorldWidthTiles * TileSize
   MapPixelH* = WorldHeightTiles * TileSize
   ScoreboardWidth* = 150
-  ScoreboardHeight* = 180
+  # Increased from 180 to give headroom for 7+ players (14+ text lines at ~7px each)
+  # plus margins. Prevents the last player's entry from being cut off at the bottom
+  # of the scoreboard UI layer.
+  ScoreboardHeight* = 256
   LegendWidth* = 290
   LegendSlotCount* = 3
   LegendRowHeight = BlockyCharHeight + 4
@@ -61,7 +64,7 @@ proc playerColorIndex(idx: int): int =
   ## Returns the identity-color slot for a player, by their seat index.
   idx mod PlayerColors.len
 
-proc buildGlobalInitPacket*(sim: SimServer): seq[uint8] =
+proc buildGlobalInitPacket*(sim: SimServer, showDebug: bool = true): seq[uint8] =
   var packet: seq[uint8]
 
   packet.addLayer(MapLayerId, MapLayerKind, ZoomableFlag)
@@ -73,8 +76,9 @@ proc buildGlobalInitPacket*(sim: SimServer): seq[uint8] =
   packet.addLayer(LegendLayerId, LegendLayerType, UiFlag)
   packet.addViewport(LegendLayerId, LegendWidth, LegendHeight)
 
-  packet.addLayer(DebugLayerId, DebugLayerType, UiFlag)
-  packet.addViewport(DebugLayerId, DebugWidth, DebugHeight)
+  if showDebug:
+    packet.addLayer(DebugLayerId, DebugLayerType, UiFlag)
+    packet.addViewport(DebugLayerId, DebugWidth, DebugHeight)
 
   packet.addCommonSprites()
 
@@ -101,11 +105,11 @@ proc buildGlobalInitPacket*(sim: SimServer): seq[uint8] =
 
   packet
 
-proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState): seq[uint8] =
+proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState, showDebug: bool = true): seq[uint8] =
   var packet: seq[uint8]
 
   if not state.initialized:
-    packet = buildGlobalInitPacket(sim)
+    packet = buildGlobalInitPacket(sim, showDebug)
     state.initialized = true
 
   # Update world objects (depletion changes)
@@ -189,7 +193,7 @@ proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState): seq[
     inc rowSlot
 
   # Debug tick counter, bottom-left.
-  if sim.letterSprites.len > 0:
+  if showDebug and sim.letterSprites.len > 0:
     let tickText = $sim.tickCount
     let tickPixels = renderBlockyTextToRgba(sim.letterSprites, sim.digitSprites, tickText, 2)
     if tickPixels.len > 0:

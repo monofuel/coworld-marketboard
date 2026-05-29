@@ -1,4 +1,4 @@
-import std/[monotimes, net, os, osproc, parseopt, sequtils, strformat, strutils, times]
+import std/[exitprocs, monotimes, net, os, osproc, parseopt, sequtils, strformat, strutils, times]
 
 const
   BatchSource = "tools" / "batch_market.nim"
@@ -23,6 +23,12 @@ const
 
   ServerReadyTimeoutMs = 5000
   PollIntervalMs = 100
+
+var
+  liveServerProcess: Process
+  liveBotProcesses: seq[Process]
+  liveBotNames: seq[string]
+  liveCleanupStarted = false
 
 type
   QuickReplayConfig = object
@@ -102,6 +108,28 @@ proc stopManagedProcess(processRef: var Process, label: string) =
     discard
   processRef = nil
 
+proc cleanupLiveChildren() =
+  if liveCleanupStarted:
+    return
+  liveCleanupStarted = true
+
+  for i in countdown(liveBotProcesses.high, 0):
+    stopManagedProcess(liveBotProcesses[i], liveBotNames[i])
+  liveBotProcesses.setLen(0)
+  liveBotNames.setLen(0)
+
+  if not liveServerProcess.isNil:
+    stopManagedProcess(liveServerProcess, "server")
+
+proc cleanupLiveAtExit() {.noconv.} =
+  cleanupLiveChildren()
+
+proc controlCHookLive() {.noconv.} =
+  echo ""
+  echo "Ctrl+C received, shutting down live session..."
+  cleanupLiveChildren()
+  quit(130)
+
 proc waitForServerReady(host: string, port: int): bool =
   let
     startedAt = getMonoTime()
@@ -173,6 +201,10 @@ when isMainModule:
       discard
     else: discard
 
+  # Robust child process cleanup for --live mode (prevents port leaks on Ctrl+C or crashes)
+  addExitProc(cleanupLiveAtExit)
+  setControlCHook(controlCHookLive)
+
   let nimExe = findExe("nim")
   if nimExe.len == 0:
     echo "Unable to find 'nim' on PATH."
@@ -199,18 +231,17 @@ when isMainModule:
     ]
 
     echo "Starting live server..."
-    var serverProcess: Process
     try:
       # config.nims + nimby-generated nim.cfg supply all required paths.
       var serverNimArgs = @["r", ServerSource]
       for a in serverArgs: serverNimArgs.add a
-      serverProcess = startProcess(
+      liveServerProcess = startProcess(
         nimExe,
         workingDir = rootDir,
         args = serverNimArgs,
         options = {poParentStreams}
       )
-      echo "  Server PID: ", serverProcess.processID
+      echo "  Server PID: ", liveServerProcess.processID
     except CatchableError as e:
       echo "Failed to start server: ", e.msg
       quit(1)
@@ -218,15 +249,13 @@ when isMainModule:
     # Wait for server to accept connections (reliable, not a fixed sleep)
     if not waitForServerReady(config.address, config.port):
       echo "Server did not become ready; aborting live mode."
-      if serverProcess != nil and serverProcess.peekExitCode() == -1:
-        serverProcess.terminate()
-        serverProcess.close()
+      cleanupLiveChildren()
       quit(1)
 
     # Spawn bot clients so the simulation has players driving the economy.
     # Without bots the world is empty and the global viewer shows a static map.
-    var botProcesses: seq[Process]
-    var botNames: seq[string]
+    liveBotProcesses = @[]
+    liveBotNames = @[]
     if config.bots.len > 0:
       echo "Starting bots: ", config.bots.join(", ")
       for botName in config.bots:
@@ -235,12 +264,12 @@ when isMainModule:
           let p = nimRunProcess(nimExe, rootDir, botName, source,
             ["--address:" & config.address, "--port:" & $config.port,
              "--name:" & botName])
-          botProcesses.add p
-          botNames.add botName
+          liveBotProcesses.add p
+          liveBotNames.add botName
         except CatchableError as e:
           echo "Failed to start bot ", botName, ": ", e.msg
           # Fall through to cleanup below
-      echo "  Bots spawned: ", botProcesses.len
+      echo "  Bots spawned: ", liveBotProcesses.len
 
     echo "Starting fullmap viewer (connects live to /global as spectator)..."
     let viewerAddr = "ws://" & config.address & ":" & $config.port & "/global"
@@ -249,13 +278,8 @@ when isMainModule:
 
     let viewerRc = execCmd(nimExe & " " & viewerNimArgs.join(" "))
 
-    # Cleanup: stop bots first, then server
-    for i in countdown(botProcesses.high, 0):
-      stopManagedProcess(botProcesses[i], botNames[i])
-    if serverProcess != nil and serverProcess.peekExitCode() == -1:
-      echo "Shutting down server..."
-      serverProcess.terminate()
-      serverProcess.close()
+    # Normal cleanup path (viewer exited cleanly)
+    cleanupLiveChildren()
     quit(viewerRc)
   else:
     echo &"Recording 1 match ({config.ticks} ticks)..."
