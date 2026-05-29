@@ -106,7 +106,11 @@ proc decide*(bot: var BotState, state: GameState): uint8 =
     return ButtonA
 
   of PathToStoneNode:
-    if p.hasSellableMaterials and p.canSellMore:
+    # Iteration 3 tweak: light batching guard for the opportunistic stone gatherer.
+    # Pipitori still flips when it makes sense, but now waits a bit before
+    # rushing to sell. Goal: cleaner market pressure and more visible
+    # drought/cornering moments for TV legends.
+    if p.hasSellableMaterials and p.canSellMore and bot.ticksInPhase > 20:
       bot.phase = PathToSellStall
       bot.ticksInPhase = 0
       return 0
