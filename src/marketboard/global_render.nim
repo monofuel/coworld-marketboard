@@ -16,13 +16,13 @@ const
   ScoreboardHeight* = 256
   LegendWidth* = 290
   LegendSlotCount* = 3
-  LegendRowHeight = 8
+  LegendRowHeight = BlockyCharHeight + 4
   LegendHeight* = LegendSlotCount * LegendRowHeight + 4
 
   DebugLayerId* = 3
   DebugLayerType = 4              # bottom-left anchor
   DebugWidth* = 90
-  DebugHeight* = 10
+  DebugHeight* = BlockyCharHeight + 4
   DebugTextSpriteId = 800
   DebugObjectId = 9000
 
@@ -192,13 +192,12 @@ proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState, showD
       packet.addObject(ScoreboardRowObjectBase + rowSlot, textX + MbFont.glyphAdvance(' ') * 2, rowY2, 0, ScoreboardLayerId, spriteId)
     inc rowSlot
 
-  # Debug tick counter, bottom-left. Uses tiny5 typography.
-  if showDebug:
+  # Debug tick counter, bottom-left.
+  if showDebug and sim.letterSprites.len > 0:
     let tickText = $sim.tickCount
-    let tickPixels = renderTextToRgba(tickText, 2)
+    let tickPixels = renderBlockyTextToRgba(sim.letterSprites, sim.digitSprites, tickText, 2)
     if tickPixels.len > 0:
-      let w = MbFont.textWidth(tickText)
-      packet.addSprite(DebugTextSpriteId, w, MbFont.height, tickPixels)
+      packet.addSprite(DebugTextSpriteId, tickText.len * BlockyCharWidth + 2, BlockyCharHeight + 2, tickPixels)
       packet.addObject(DebugObjectId, 2, 2, 0, DebugLayerId, DebugTextSpriteId)
 
   packet
@@ -206,18 +205,19 @@ proc buildGlobalFramePacket*(sim: SimServer, state: var GlobalViewerState, showD
 proc buildLegendPacket*(sim: SimServer, slots: openArray[string]): seq[uint8] =
   ## Builds the legend overlay layer: one left-aligned caption per slot at a
   ## fixed row, so captions never reorder or shift horizontally. Empty slots
-  ## are removed so freed rows clear cleanly. Uses tiny5 for clean typography.
+  ## are removed so freed rows clear cleanly.
   var packet: seq[uint8]
+  let maxChars = (LegendWidth - 4) div BlockyCharWidth
   for i in 0 ..< LegendSlotCount:
-    let text = if i < slots.len: slots[i] else: ""
-    if text.len == 0:
+    let raw = if i < slots.len: slots[i] else: ""
+    if raw.len == 0 or sim.letterSprites.len == 0:
       packet.addRemoveObject(LegendObjectId + i)
       continue
-    let textPixels = renderTextToRgba(text, 8)
+    let text = if raw.len > maxChars: raw[0 ..< maxChars] else: raw
+    let textPixels = renderBlockyTextToRgba(sim.letterSprites, sim.digitSprites, text, 14)
     if textPixels.len == 0:
       packet.addRemoveObject(LegendObjectId + i)
       continue
-    let w = MbFont.textWidth(text)
-    packet.addSprite(LegendTextSpriteId + i, w, MbFont.height, textPixels)
+    packet.addSprite(LegendTextSpriteId + i, text.len * BlockyCharWidth + 2, BlockyCharHeight + 2, textPixels)
     packet.addObject(LegendObjectId + i, 2, i * LegendRowHeight, 0, LegendLayerId, LegendTextSpriteId + i)
   packet
